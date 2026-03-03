@@ -1,0 +1,13 @@
+version: '3.8'
+services:
+  webcam:
+    build: .
+    ports:
+      - "8501:8501"
+    devices:
+      # This will mount the webcam to the container.
+      # You might need to change /dev/video0 to a different device
+      # depending on your system.
+      - "/dev/video0:/dev/video0"
+    environment:
+      - PYTHONUNBUFFERED=1
