@@ -1,9 +1,11 @@
-version: '3.8'
 services:
   webcam:
     build: .
     ports:
       - "8501:8501"
+    privileged: true
+    group_add:
+      - video
     devices:
       # This will mount the webcam to the container.
       # You might need to change /dev/video0 to a different device
@@ -11,3 +13,6 @@ services:
       - "/dev/video0:/dev/video0"
     environment:
       - PYTHONUNBUFFERED=1
+      - CAMERA_DEVICE=/dev/video0
+      - YOLO_CONFIG_DIR=/tmp/Ultralytics
+      - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false

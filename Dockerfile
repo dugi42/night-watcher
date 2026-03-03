@@ -13,6 +13,8 @@ RUN uv sync --no-dev --no-install-project
 
 # Use the project virtualenv for runtime commands
 ENV PATH="/app/.venv/bin:${PATH}"
+ENV YOLO_CONFIG_DIR="/tmp/Ultralytics"
+ENV STREAMLIT_BROWSER_GATHER_USAGE_STATS="false"
 
 # Copy the application code
 COPY . .
