@@ -14,5 +14,6 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - CAMERA_DEVICE=/dev/video0
-      - YOLO_CONFIG_DIR=/tmp/Ultralytics
+      - YOLO_CONFIG_DIR=/tmp
+      - YOLO_MODEL_PATH=/app/models/yolov8n.pt
       - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false

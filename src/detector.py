@@ -1,4 +1,7 @@
 import cv2
+import logging
+import threading
+from concurrent.futures import Future, ThreadPoolExecutor
 from ultralytics import YOLO
 
 ANIMAL_CLASSES = {
@@ -14,6 +17,7 @@ ANIMAL_CLASSES = {
     "giraffe",
 }
 TARGET_CLASSES = {"person"} | ANIMAL_CLASSES
+logger = logging.getLogger("night_watcher.detector")
 
 
 class YoloDetector:
@@ -47,8 +51,7 @@ class YoloDetector:
 
         return detections
 
-    def detect_and_annotate(self, frame):
-        detections = self.detect(frame)
+    def annotate(self, frame, detections):
         annotated_frame = frame.copy()
 
         for det in detections:
@@ -67,5 +70,50 @@ class YoloDetector:
                 cv2.LINE_AA,
             )
 
+        return annotated_frame
+
+    def detect_and_annotate(self, frame):
+        detections = self.detect(frame)
+        annotated_frame = self.annotate(frame, detections)
         detection_flag = len(detections) > 0
         return annotated_frame, detection_flag, detections
+
+
+class AsyncYoloDetector:
+    """Runs detection in a single background worker so UI rendering stays responsive."""
+
+    def __init__(self, detector: YoloDetector):
+        self.detector = detector
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="yolo-detector")
+        self._future: Future | None = None
+        self._latest_detections = []
+        self._lock = threading.Lock()
+
+    def _poll_result(self) -> None:
+        if self._future is None or not self._future.done():
+            return
+        try:
+            detections = self._future.result()
+        except Exception:
+            logger.exception("YOLO async inference failed")
+            detections = []
+        with self._lock:
+            self._latest_detections = detections
+        self._future = None
+
+    def process_frame(self, frame):
+        self._poll_result()
+
+        if self._future is None:
+            # Submit latest frame; older frames are intentionally dropped.
+            self._future = self._executor.submit(self.detector.detect, frame.copy())
+
+        with self._lock:
+            detections = list(self._latest_detections)
+
+        annotated_frame = self.detector.annotate(frame, detections)
+        detection_flag = len(detections) > 0
+        return annotated_frame, detection_flag, detections
+
+    def close(self) -> None:
+        self._executor.shutdown(wait=False, cancel_futures=True)

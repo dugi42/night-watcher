@@ -1,9 +1,10 @@
 import cv2
+import os
 import streamlit as st
 import time
 
 from src.camera import configure_camera, list_video_devices, open_camera, read_frame, release_camera
-from src.detector import YoloDetector
+from src.detector import AsyncYoloDetector, YoloDetector
 from src.utils import setup_logging
 
 logger = setup_logging().getChild("app")
@@ -11,8 +12,9 @@ logger = setup_logging().getChild("app")
 
 @st.cache_resource
 def get_detector() -> YoloDetector:
-    logger.info("Loading YOLO detector model")
-    return YoloDetector(model_name="yolov8n.pt", conf_threshold=0.35)
+    model_path = os.getenv("YOLO_MODEL_PATH", "/app/models/yolov8n.pt")
+    logger.info("Loading YOLO detector model from %s", model_path)
+    return YoloDetector(model_name=model_path, conf_threshold=0.35)
 
 
 def toggle_detection():
@@ -26,6 +28,7 @@ def initialize_state() -> None:
         "cap": None,
         "camera_error": None,
         "frame_count": 0,
+        "async_detector": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -91,10 +94,12 @@ def main():
     )
     st.write(f"Detection enabled: `{st.session_state.detection_enabled}`")
 
-    detector = None
+    async_detector = st.session_state.async_detector
     if st.session_state.detection_enabled:
         try:
-            detector = get_detector()
+            if st.session_state.async_detector is None:
+                st.session_state.async_detector = AsyncYoloDetector(get_detector())
+            async_detector = st.session_state.async_detector
         except Exception:
             logger.exception("YOLO detector failed to load")
             st.error("Failed to load YOLO model. Check dependencies and model download.")
@@ -127,8 +132,8 @@ def main():
 
     detection_flag = False
     detected_labels = []
-    if detector is not None:
-        frame, detection_flag, detections = detector.detect_and_annotate(frame)
+    if async_detector is not None:
+        frame, detection_flag, detections = async_detector.process_frame(frame)
         detected_labels = sorted({d["label"] for d in detections})
 
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
