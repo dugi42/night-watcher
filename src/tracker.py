@@ -1,3 +1,19 @@
+"""Detection session tracker.
+
+Groups individual YOLO detections into continuous *sessions* — a period during
+which at least one target object remains visible. Each session gets a UUID and
+is persisted to ``/assets/meta/detections.json`` when it ends.
+
+Typical usage
+-------------
+    tracker = DetectionTracker()
+    recorder = VideoRecorder()
+    tracker.set_callbacks(on_start=recorder.start, on_end=lambda _: recorder.stop())
+
+    for detections in yolo_results:
+        session_id = tracker.update(detections)
+"""
+
 import json
 import logging
 import os
@@ -13,11 +29,14 @@ ASSETS_DIR = Path(os.getenv("ASSETS_DIR", "/assets"))
 META_DIR = ASSETS_DIR / "meta"
 DETECTIONS_FILE = META_DIR / "detections.json"
 
-DISAPPEAR_TIMEOUT = 3.0  # seconds without detection before ending a session
+#: Seconds without a detection before declaring an object gone.
+DISAPPEAR_TIMEOUT = 3.0
 
 
 @dataclass
 class _ObjectTrack:
+    """Tracks one class of object within a session."""
+
     label: str
     first_seen: float
     last_seen: float
@@ -25,27 +44,60 @@ class _ObjectTrack:
 
 @dataclass
 class _Session:
+    """A continuous period where at least one target object is visible."""
+
     session_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     start_time: float = field(default_factory=time.time)
     end_time: Optional[float] = None
-    objects: dict = field(default_factory=dict)  # label -> _ObjectTrack
+    #: Maps class label to its track within this session.
+    objects: dict[str, _ObjectTrack] = field(default_factory=dict)
 
 
 class DetectionTracker:
-    """Tracks detection sessions, persists metadata as JSON, and fires callbacks."""
+    """Tracks detection sessions, persists metadata as JSON, and fires callbacks.
 
-    def __init__(self, disappear_timeout: float = DISAPPEAR_TIMEOUT):
+    A session begins when the first detection arrives and ends when all tracked
+    classes have been absent for longer than *disappear_timeout* seconds.
+
+    Parameters
+    ----------
+    disappear_timeout:
+        Seconds of inactivity before a session is closed. Defaults to 3.0.
+    """
+
+    def __init__(self, disappear_timeout: float = DISAPPEAR_TIMEOUT) -> None:
         self._timeout = disappear_timeout
         self._session: Optional[_Session] = None
         self._on_start = None   # callback(session_id: str)
         self._on_end = None     # callback(session_id: str)
 
-    def set_callbacks(self, on_start=None, on_end=None):
+    def set_callbacks(self, on_start=None, on_end=None) -> None:
+        """Register lifecycle callbacks.
+
+        Parameters
+        ----------
+        on_start:
+            Called with the new session UUID when a session begins.
+        on_end:
+            Called with the session UUID when a session ends.
+        """
         self._on_start = on_start
         self._on_end = on_end
 
     def update(self, detections: list[dict]) -> Optional[str]:
-        """Feed current-frame detections. Returns active session_id or None."""
+        """Process the current frame's detections and return the active session ID.
+
+        Parameters
+        ----------
+        detections:
+            List of detection dicts with at least a ``"label"`` key, as
+            returned by :class:`~src.detector.YoloDetector`.
+
+        Returns
+        -------
+        str | None
+            The active session UUID, or ``None`` if no session is open.
+        """
         now = time.time()
         labels = {d["label"] for d in detections}
 
@@ -75,26 +127,41 @@ class DetectionTracker:
         return self._session.session_id if self._session else None
 
     def force_end(self) -> None:
-        """Immediately end the active session (e.g. on stream stop)."""
+        """Immediately close any open session, e.g. when the stream stops."""
         if self._session is not None:
+            logger.info("Forcing session end: %s", self._session.session_id)
             self._end_session(time.time())
 
+    @property
+    def active_session_id(self) -> Optional[str]:
+        """The UUID of the currently open session, or ``None``."""
+        return self._session.session_id if self._session else None
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
     def _end_session(self, end_time: float) -> None:
+        """Finalise and persist the current session, then fire the callback."""
         session = self._session
         session.end_time = end_time
         self._session = None
-        logger.info("Session ended: %s (%.1fs)", session.session_id, end_time - session.start_time)
+        duration = end_time - session.start_time
+        logger.info("Session ended: %s (%.1fs)", session.session_id, duration)
         self._persist(session)
         if self._on_end:
             self._on_end(session.session_id)
 
     def _persist(self, session: _Session) -> None:
+        """Append the finished session to the JSON history file."""
         META_DIR.mkdir(parents=True, exist_ok=True)
         record = {
             "uuid": session.session_id,
             "start_time": session.start_time,
             "end_time": session.end_time,
-            "duration_seconds": round((session.end_time or session.start_time) - session.start_time, 2),
+            "duration_seconds": round(
+                (session.end_time or session.start_time) - session.start_time, 2
+            ),
             "objects": [
                 {
                     "label": t.label,
@@ -108,13 +175,11 @@ class DetectionTracker:
         try:
             data = json.loads(DETECTIONS_FILE.read_text()) if DETECTIONS_FILE.exists() else []
         except (json.JSONDecodeError, OSError):
+            logger.warning("Could not read existing detections; starting fresh")
             data = []
         data.append(record)
         try:
             DETECTIONS_FILE.write_text(json.dumps(data, indent=2))
+            logger.debug("Persisted session %s to %s", session.session_id, DETECTIONS_FILE)
         except OSError:
             logger.exception("Failed to write detection metadata")
-
-    @property
-    def active_session_id(self) -> Optional[str]:
-        return self._session.session_id if self._session else None

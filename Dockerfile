@@ -1,33 +1,39 @@
-# Use an official Python runtime as a parent image
+# syntax=docker/dockerfile:1
 FROM python:3.12-slim
 
-# Install uv from Astral's published image (deterministic binary path)
+# Install system dependencies:
+# - ffmpeg: required by OpenCV VideoWriter for mp4v codec
+# - v4l-utils: V4L2 camera utilities (optional, useful for debugging)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        v4l-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv from the official image (pinned binary path)
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-# Set the working directory in the container
 WORKDIR /app
 
-# Copy project metadata and install dependencies only
+# Install Python dependencies first (cached unless pyproject.toml changes)
 COPY pyproject.toml ./
-RUN uv sync --no-dev --no-install-project
+RUN uv sync --no-dev --no-group client --no-install-project
 
-# Use the project virtualenv for runtime commands
+# Use the project virtualenv for all subsequent commands
 ENV PATH="/app/.venv/bin:${PATH}"
 ENV YOLO_CONFIG_DIR="/tmp"
 ENV YOLO_MODEL_PATH="/app/models/yolov8n.pt"
-ENV STREAMLIT_BROWSER_GATHER_USAGE_STATS="false"
+ENV ASSETS_DIR="/assets"
 
-# Pre-create writable config/model dirs and pre-download YOLO weights
+# Pre-download YOLO weights into the image so the container starts immediately
 RUN mkdir -p /tmp/Ultralytics /app/models \
     && chmod -R 777 /tmp/Ultralytics \
     && uv run python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')" \
     && mv /app/yolov8n.pt /app/models/yolov8n.pt
 
-# Copy the application code
+# Copy application code (after dependency install to maximise layer caching)
 COPY . .
 
-# Make port 8501 available to the world outside this container
-EXPOSE 8501
+# FastAPI service port
+EXPOSE 8000
 
-# Run app.py when the container launches
-CMD ["uv", "run", "streamlit", "run", "app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+CMD ["uv", "run", "uvicorn", "src.service:app", "--host", "0.0.0.0", "--port", "8000"]

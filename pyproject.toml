@@ -1,12 +1,21 @@
 [project]
 name = "night-watcher"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.0"
+description = "Raspberry Pi wildlife camera with YOLO detection and Streamlit dashboard"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "streamlit",
+    # Pi-side service dependencies
     "opencv-python-headless",
     "ultralytics",
+    "fastapi",
+    "uvicorn[standard]",
     "pandas",
+]
+
+[dependency-groups]
+client = [
+    # Additional dependencies for the local Streamlit client
+    "streamlit",
+    "requests",
 ]

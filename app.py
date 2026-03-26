@@ -1,238 +1,123 @@
-import cv2
-import json
+"""Streamlit client for Night Watcher — runs on your local machine.
+
+Connects to the FastAPI detection service running on the Raspberry Pi and
+displays a live MJPEG stream alongside detection statistics and recorded video
+clips. Configure the Pi URL via the RASPI_URL environment variable or the
+sidebar input.
+
+Usage
+-----
+    RASPI_URL=http://raspi.local:8000 streamlit run app.py
+"""
+
 import os
-import streamlit as st
-import time
 from collections import Counter
 from datetime import datetime
-from pathlib import Path
 
 import pandas as pd
+import requests
+import streamlit as st
 
-from src.camera import configure_camera, list_video_devices, open_camera, read_frame, release_camera
-from src.detector import AsyncYoloDetector, YoloDetector
-from src.recorder import VideoRecorder
-from src.tracker import DetectionTracker
-from src.utils import setup_logging
-
-logger = setup_logging().getChild("app")
-
-ASSETS_DIR = Path(os.getenv("ASSETS_DIR", "/assets"))
-META_FILE = ASSETS_DIR / "meta" / "detections.json"
-VIDEO_DIR = ASSETS_DIR / "video"
+DEFAULT_URL = os.getenv("RASPI_URL", "http://raspi.local:8000")
 
 
-@st.cache_resource
-def get_detector() -> YoloDetector:
-    model_path = os.getenv("YOLO_MODEL_PATH", "/app/models/yolov8n.pt")
-    logger.info("Loading YOLO detector model from %s", model_path)
-    return YoloDetector(model_name=model_path, conf_threshold=0.35)
+def _get(path: str, base_url: str, timeout: float = 3.0):
+    """Perform a GET request against the Pi service and return the response.
+
+    Returns None on any network or HTTP error, avoiding noisy tracebacks in
+    the UI.
+    """
+    try:
+        resp = requests.get(f"{base_url}{path}", timeout=timeout)
+        resp.raise_for_status()
+        return resp
+    except requests.RequestException:
+        return None
 
 
-def toggle_detection():
-    st.session_state.detection_enabled = not st.session_state.detection_enabled
+def _render_sidebar() -> str:
+    """Render the sidebar and return the configured Pi base URL."""
+    with st.sidebar:
+        st.image("assets/logo.jpeg", use_container_width=True)
+        st.title("Night Watcher")
+        url = st.text_input("Pi service URL", value=DEFAULT_URL)
+
+        resp = _get("/health", url, timeout=2.0)
+        if resp is not None:
+            st.success("Pi reachable")
+        else:
+            st.error("Pi unreachable")
+    return url.rstrip("/")
 
 
-def initialize_state() -> None:
-    defaults = {
-        "detection_enabled": False,
-        "streaming": False,
-        "cap": None,
-        "camera_error": None,
-        "frame_count": 0,
-        "async_detector": None,
-        "tracker": None,
-        "recorder": None,
-    }
-    for key, value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
+def _render_stream_tab(url: str) -> None:
+    """Render the live MJPEG stream and current detection status.
 
+    The stream is embedded via an HTML <img> tag pointing directly at the
+    Pi's MJPEG endpoint; the browser handles continuous updates without
+    Streamlit needing to poll for frames.
+    """
+    stream_url = f"{url}/stream"
 
-def start_stream() -> None:
-    cap = st.session_state.get("cap")
-    if cap is not None and cap.isOpened():
-        st.session_state.streaming = True
-        st.session_state.camera_error = None
-        return
-
-    logger.info("Opening webcam device 0")
-    cap = open_camera(0)
-    if cap is None or not cap.isOpened():
-        devices = list_video_devices()
-        logger.error("Cannot open camera device 0 (devices in container: %s)", devices)
-        st.session_state.streaming = False
-        st.session_state.camera_error = (
-            "Cannot open camera device 0. "
-            f"Available devices in container: {devices or 'none'}"
-        )
-        release_camera(cap)
-        st.session_state.cap = None
-        return
-
-    configure_camera(cap, width=640, height=480, fps=20)
-    st.session_state.cap = cap
-    st.session_state.streaming = True
-    st.session_state.camera_error = None
-    st.session_state.frame_count = 0
-
-
-def stop_stream() -> None:
-    tracker: DetectionTracker | None = st.session_state.get("tracker")
-    if tracker is not None:
-        tracker.force_end()
-    recorder: VideoRecorder | None = st.session_state.get("recorder")
-    if recorder is not None:
-        recorder.stop()
-    release_camera(st.session_state.get("cap"))
-    st.session_state.cap = None
-    st.session_state.streaming = False
-    logger.info("Released webcam stream")
-
-
-def _ensure_tracker_recorder() -> None:
-    """Lazily create tracker and recorder and wire them together."""
-    if st.session_state.tracker is None:
-        recorder = VideoRecorder()
-        tracker = DetectionTracker()
-        tracker.set_callbacks(on_start=recorder.start, on_end=recorder.stop)
-        st.session_state.tracker = tracker
-        st.session_state.recorder = recorder
-
-
-def _render_stream_tab() -> None:
-    controls = st.columns(3)
-    controls[0].button(
-        "Start Stream",
-        on_click=start_stream,
-        disabled=st.session_state.streaming,
-        use_container_width=True,
-    )
-    controls[1].button(
-        "Stop Stream",
-        on_click=stop_stream,
-        disabled=not st.session_state.streaming,
-        use_container_width=True,
-    )
-    controls[2].button(
-        "Toggle Detection",
-        on_click=toggle_detection,
-        use_container_width=True,
-    )
-    st.write(f"Detection enabled: `{st.session_state.detection_enabled}`")
-
-    async_detector = st.session_state.async_detector
-    if st.session_state.detection_enabled:
-        try:
-            if st.session_state.async_detector is None:
-                st.session_state.async_detector = AsyncYoloDetector(get_detector())
-            async_detector = st.session_state.async_detector
-            _ensure_tracker_recorder()
-        except Exception:
-            logger.exception("YOLO detector failed to load")
-            st.error("Failed to load YOLO model. Check dependencies and model download.")
-            return
-
-    if st.session_state.camera_error:
-        st.error(st.session_state.camera_error)
-
-    frame_placeholder = st.empty()
-    status_placeholder = st.empty()
-
-    if not st.session_state.streaming:
-        status_placeholder.write("Stream is stopped. Click `Start Stream`.")
-        return
-
-    cap = st.session_state.get("cap")
-    if cap is None or not cap.isOpened():
-        st.session_state.streaming = False
-        st.session_state.camera_error = "Camera handle is unavailable. Click `Start Stream` again."
-        st.error(st.session_state.camera_error)
-        return
-
-    ret, frame = read_frame(cap)
-    if not ret:
-        logger.error("Failed to capture frame from webcam")
-        st.session_state.camera_error = "Failed to capture frame from webcam."
-        stop_stream()
-        st.error(st.session_state.camera_error)
-        return
-
-    detection_flag = False
-    detected_labels = []
-    detections = []
-
-    if async_detector is not None:
-        frame, detection_flag, detections = async_detector.process_frame(frame)
-        detected_labels = sorted({d["label"] for d in detections})
-
-    # Update tracker and feed recorder
-    tracker: DetectionTracker | None = st.session_state.get("tracker")
-    recorder: VideoRecorder | None = st.session_state.get("recorder")
-    if tracker is not None:
-        tracker.update(detections if st.session_state.detection_enabled else [])
-    if recorder is not None and recorder.is_recording:
-        recorder.write_frame(frame)
-
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    frame_placeholder.image(frame_rgb, channels="RGB", output_format="JPEG")
-
-    session_id = tracker.active_session_id if tracker else None
-    st.session_state.frame_count += 1
-    status_placeholder.write(
-        f"detection_flag: `{detection_flag}` | "
-        f"detected: `{', '.join(detected_labels) or 'none'}` | "
-        f"recording: `{recorder.is_recording if recorder else False}` | "
-        f"session: `{session_id[:8] + '...' if session_id else 'none'}` | "
-        f"frames: `{st.session_state.frame_count}`"
+    st.components.v1.html(
+        f"""
+        <img
+            src="{stream_url}"
+            style="width:100%;height:auto;border-radius:6px;"
+            onerror="this.alt='Stream unavailable — is the Pi running?'"
+        />
+        """,
+        height=500,
     )
 
-    if st.session_state.frame_count % 300 == 0:
-        logger.info(
-            "Processed %d frames (detection_enabled=%s)",
-            st.session_state.frame_count,
-            st.session_state.detection_enabled,
-        )
+    resp = _get("/status", url)
+    if resp is not None:
+        status = resp.json()
+        classes = ", ".join(status.get("detected_classes", [])) or "none"
+        sid = status.get("session_id") or ""
+        col1, col2 = st.columns(2)
+        col1.metric("Detected", classes)
+        col2.metric("Session", sid[:8] + "…" if sid else "—")
+    else:
+        st.warning("Could not fetch status from Pi.")
 
-    time.sleep(0.08)
-    st.rerun()
 
+def _render_stats_tab(url: str) -> None:
+    """Render detection statistics and recorded session clips.
 
-def _render_stats_tab() -> None:
+    Fetches the full session history from the Pi's /detections endpoint and
+    displays summary metrics, per-class bar charts, and an expandable list of
+    recent sessions with inline video playback.
+    """
     st.header("Detection Statistics")
 
-    if st.button("Refresh", key="stats_refresh"):
+    if st.button("Refresh"):
         st.rerun()
 
-    if not META_FILE.exists():
-        st.info("No detection data yet. Start the stream with detection enabled.")
+    resp = _get("/detections", url, timeout=5.0)
+    if resp is None:
+        st.error("Could not fetch detection history from Pi.")
         return
 
-    try:
-        sessions = json.loads(META_FILE.read_text())
-    except Exception:
-        st.error("Could not load detection data.")
-        return
-
+    sessions: list[dict] = resp.json()
     if not sessions:
-        st.info("No sessions recorded yet.")
+        st.info("No detection sessions recorded yet.")
         return
 
     all_objects = [o for s in sessions for o in s.get("objects", [])]
     class_counter = Counter(o["label"] for o in all_objects)
-    total_duration = sum(s.get("duration_seconds", 0) for s in sessions)
+    total_duration = sum(s.get("duration_seconds", 0.0) for s in sessions)
+    top_class = class_counter.most_common(1)[0][0] if class_counter else "—"
 
     # Summary metrics
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total Sessions", len(sessions))
-    c2.metric("Total Recording Time", f"{total_duration:.0f}s")
+    c1.metric("Sessions", len(sessions))
+    c2.metric("Total Time", f"{total_duration:.0f}s")
     c3.metric("Unique Classes", len(class_counter))
-    top_class = class_counter.most_common(1)[0][0] if class_counter else "—"
     c4.metric("Most Detected", top_class)
 
     st.divider()
 
-    # Charts side by side
     col_l, col_r = st.columns(2)
 
     with col_l:
@@ -243,7 +128,7 @@ def _render_stats_tab() -> None:
         st.bar_chart(df_count)
 
     with col_r:
-        st.subheader("Avg Detection Duration per Class (s)")
+        st.subheader("Avg Duration per Class (s)")
         dur_by_class: dict[str, list[float]] = {}
         for o in all_objects:
             dur_by_class.setdefault(o["label"], []).append(o.get("duration_seconds", 0.0))
@@ -254,7 +139,6 @@ def _render_stats_tab() -> None:
         ).set_index("Class")
         st.bar_chart(df_dur)
 
-    # Sessions per day chart
     if len(sessions) >= 2:
         st.subheader("Sessions per Day")
         day_counter: Counter = Counter()
@@ -267,9 +151,8 @@ def _render_stats_tab() -> None:
         st.bar_chart(df_day)
 
     st.divider()
+    st.subheader(f"Recent Sessions (showing last 30 of {len(sessions)})")
 
-    # Recent sessions
-    st.subheader(f"Sessions (most recent first, total: {len(sessions)})")
     for session in reversed(sessions[-30:]):
         uid: str = session["uuid"]
         start_dt = datetime.fromtimestamp(session["start_time"])
@@ -277,46 +160,45 @@ def _render_stats_tab() -> None:
         classes = ", ".join(sorted({o["label"] for o in session.get("objects", [])}))
 
         with st.expander(f"{start_dt:%Y-%m-%d %H:%M:%S}  —  {classes}  ({duration:.1f}s)"):
-            cols = st.columns([1, 2])
-            with cols[0]:
+            left, right = st.columns([1, 2])
+
+            with left:
                 st.write(f"**UUID:** `{uid}`")
                 end_ts = session.get("end_time")
-                if end_ts:
-                    end_dt = datetime.fromtimestamp(end_ts)
-                    st.write(f"**Start:** {start_dt:%H:%M:%S}  →  **End:** {end_dt:%H:%M:%S}")
+                end_dt = datetime.fromtimestamp(end_ts) if end_ts else None
+                st.write(f"**Start:** {start_dt:%H:%M:%S}" + (f"  →  **End:** {end_dt:%H:%M:%S}" if end_dt else ""))
                 st.write(f"**Duration:** {duration:.1f}s")
 
                 obj_rows = [
-                    {
-                        "Class": o["label"],
-                        "Duration (s)": round(o.get("duration_seconds", 0.0), 1),
-                    }
+                    {"Class": o["label"], "Duration (s)": round(o.get("duration_seconds", 0.0), 1)}
                     for o in session.get("objects", [])
                 ]
                 if obj_rows:
-                    st.dataframe(
-                        pd.DataFrame(obj_rows), hide_index=True, use_container_width=True
-                    )
+                    st.dataframe(pd.DataFrame(obj_rows), hide_index=True, use_container_width=True)
 
-            with cols[1]:
-                video_path = VIDEO_DIR / f"{uid}.mp4"
-                if video_path.exists():
-                    st.video(str(video_path))
-                else:
-                    st.write("_No video recording available_")
+            with right:
+                video_url = f"{url}/video/{uid}"
+                # Streamlit's st.video supports URLs directly
+                st.video(video_url)
 
 
-def main():
-    st.title("Night Watcher")
-    initialize_state()
+def main() -> None:
+    """Entry point for the Streamlit client application."""
+    st.set_page_config(
+        page_title="Night Watcher",
+        page_icon="🦉",
+        layout="wide",
+    )
 
-    tab_stream, tab_stats = st.tabs(["Live Stream", "Statistics"])
+    url = _render_sidebar()
+
+    tab_stream, tab_stats = st.tabs(["📷 Live Stream", "📊 Statistics"])
 
     with tab_stream:
-        _render_stream_tab()
+        _render_stream_tab(url)
 
     with tab_stats:
-        _render_stats_tab()
+        _render_stats_tab(url)
 
 
 if __name__ == "__main__":
