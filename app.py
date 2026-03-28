@@ -12,13 +12,23 @@ Usage
 
 import os
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, time as dt_time
 
 import pandas as pd
 import requests
 import streamlit as st
 
 DEFAULT_URL = os.getenv("RASPI_URL", "http://raspi.local:8000")
+
+
+def _post(path: str, base_url: str, payload: dict, timeout: float = 3.0):
+    """Perform a POST request against the Pi service and return the response."""
+    try:
+        resp = requests.post(f"{base_url}{path}", json=payload, timeout=timeout)
+        resp.raise_for_status()
+        return resp
+    except requests.RequestException:
+        return None
 
 
 def _get(path: str, base_url: str, timeout: float = 3.0):
@@ -47,6 +57,44 @@ def _render_sidebar() -> str:
             st.success("Pi reachable")
         else:
             st.error("Pi unreachable")
+
+        st.divider()
+        st.subheader("Detection Control")
+
+        cfg_resp = _get("/detection/config", url, timeout=2.0)
+        if cfg_resp is None:
+            st.warning("Could not fetch detection config.")
+        else:
+            cfg = cfg_resp.json()
+
+            enabled = st.toggle("Detection Enabled", value=cfg.get("enabled", True))
+
+            schedule_enabled = st.toggle(
+                "Use Time Schedule",
+                value=cfg.get("schedule_enabled", False),
+                disabled=not enabled,
+            )
+
+            start_time: dt_time = dt_time(20, 0)
+            end_time: dt_time = dt_time(6, 0)
+            if schedule_enabled and enabled:
+                col1, col2 = st.columns(2)
+                with col1:
+                    h, m = map(int, cfg.get("schedule_start", "20:00").split(":"))
+                    start_time = st.time_input("Active from", value=dt_time(h, m))
+                with col2:
+                    h, m = map(int, cfg.get("schedule_end", "06:00").split(":"))
+                    end_time = st.time_input("Active until", value=dt_time(h, m))
+
+            if st.button("Apply", type="primary"):
+                _post("/detection/config", url, {
+                    "enabled": enabled,
+                    "schedule_enabled": schedule_enabled,
+                    "schedule_start": start_time.strftime("%H:%M"),
+                    "schedule_end": end_time.strftime("%H:%M"),
+                })
+                st.rerun()
+
     return url.rstrip("/")
 
 
@@ -75,9 +123,13 @@ def _render_stream_tab(url: str) -> None:
         status = resp.json()
         classes = ", ".join(status.get("detected_classes", [])) or "none"
         sid = status.get("session_id") or ""
-        col1, col2 = st.columns(2)
-        col1.metric("Detected", classes)
-        col2.metric("Session", sid[:8] + "…" if sid else "—")
+        detection_active = status.get("detection_active", True)
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Detection", "Active" if detection_active else "Paused")
+        col2.metric("Detected", classes)
+        col3.metric("Session", sid[:8] + "…" if sid else "—")
+        if not detection_active:
+            st.info("Detection is currently paused. Enable it in the sidebar.")
     else:
         st.warning("Could not fetch status from Pi.")
 

@@ -749,6 +749,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "opencv-python-headless" },
     { name = "pandas" },
+    { name = "streamlit" },
     { name = "ultralytics" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -764,6 +765,7 @@ requires-dist = [
     { name = "fastapi" },
     { name = "opencv-python-headless" },
     { name = "pandas" },
+    { name = "streamlit", specifier = ">=1.55.0" },
     { name = "ultralytics" },
     { name = "uvicorn", extras = ["standard"] },
 ]
