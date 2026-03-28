@@ -14,9 +14,9 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /app
 
-# Install Python dependencies first (cached unless pyproject.toml changes)
-COPY pyproject.toml ./
-RUN uv sync --no-dev --no-group client --no-install-project
+# Install Python dependencies first (cached unless pyproject.toml/uv.lock changes)
+COPY pyproject.toml uv.lock ./
+RUN uv sync --no-dev --no-group client --no-install-project --frozen
 
 # Use the project virtualenv for all subsequent commands
 ENV PATH="/app/.venv/bin:${PATH}"

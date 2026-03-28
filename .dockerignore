@@ -1,0 +1,12 @@
+.git
+.gitignore
+.dockerignore
+.venv
+assets/
+models/
+*.md
+*.pyc
+__pycache__/
+.DS_Store
+.env
+.ruff_cache/
