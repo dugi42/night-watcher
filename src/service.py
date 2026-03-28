@@ -6,12 +6,14 @@ so the Streamlit client can consume live video and detection history.
 
 Endpoints
 ---------
-GET /health         Liveness probe.
-GET /frame          Latest annotated JPEG frame (for polling clients).
-GET /stream         MJPEG video stream (for browser <img> tags).
-GET /status         Current detection state as JSON.
-GET /detections     Full history of recorded sessions from detections.json.
-GET /video/{uuid}   Serve a recorded MP4 by session UUID.
+GET /health                 Liveness probe.
+GET /frame                  Latest annotated JPEG frame (for polling clients).
+GET /stream                 MJPEG video stream (for browser <img> tags).
+GET /status                 Current detection state as JSON.
+GET /detections             Full history of recorded sessions from detections.json.
+GET /video/{uuid}           Serve a recorded MP4 by session UUID.
+GET /detection/config       Current enable/schedule configuration.
+POST /detection/config      Update enable/schedule configuration.
 """
 
 import json
@@ -93,6 +95,15 @@ class _DetectionConfig:
             return now >= start_t or now <= end_t
 
     def snapshot(self) -> dict:
+        """Return a copy of the current configuration as a plain dict.
+
+        Returns
+        -------
+        dict
+            Keys: ``enabled``, ``schedule_enabled``, ``schedule_start``,
+            ``schedule_end``.  Does not include ``active`` — call
+            :meth:`is_active` separately so the lock is not held twice.
+        """
         with self._lock:
             return {
                 "enabled": self.enabled,
@@ -102,6 +113,23 @@ class _DetectionConfig:
             }
 
     def update(self, enabled: bool, schedule_enabled: bool, schedule_start: str, schedule_end: str) -> None:
+        """Atomically replace the full configuration.
+
+        Parameters
+        ----------
+        enabled:
+            When ``False``, detection is unconditionally paused regardless
+            of the schedule.
+        schedule_enabled:
+            When ``True``, detection only runs between *schedule_start* and
+            *schedule_end*.
+        schedule_start:
+            Wall-clock time in ``HH:MM`` format at which detection begins.
+        schedule_end:
+            Wall-clock time in ``HH:MM`` format at which detection ends.
+            If earlier than *schedule_start* the schedule is treated as
+            overnight (e.g. ``"22:00"`` → ``"06:00"``).
+        """
         with self._lock:
             self.enabled = enabled
             self.schedule_enabled = schedule_enabled
@@ -266,6 +294,21 @@ def get_status() -> dict:
 
 
 class _DetectionConfigIn(BaseModel):
+    """Request body for ``POST /detection/config``.
+
+    Attributes
+    ----------
+    enabled:
+        Master switch for the detection system.
+    schedule_enabled:
+        Whether to restrict detection to the time window below.
+    schedule_start:
+        Start of the active window in ``HH:MM`` (24-hour) format.
+    schedule_end:
+        End of the active window in ``HH:MM`` (24-hour) format.
+        May be earlier than *schedule_start* for overnight windows.
+    """
+
     enabled: bool
     schedule_enabled: bool
     schedule_start: str = "20:00"
