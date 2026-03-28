@@ -141,7 +141,7 @@ def release_camera(cap: cv2.VideoCapture | None) -> None:
 # Internal helpers
 # ------------------------------------------------------------------
 
-def _camera_sources(index: int) -> list:
+def _camera_sources(index: int) -> list[str | int]:
     """Build a deduplicated priority list of camera sources.
 
     Parameters
@@ -156,7 +156,7 @@ def _camera_sources(index: int) -> list:
     """
     preferred = os.getenv("CAMERA_DEVICE", f"/dev/video{index}")
     candidates = [preferred, index, f"/dev/video{index}"]
-    seen: list = []
+    seen: list[str | int] = []
     for src in candidates:
         if src not in seen:
             seen.append(src)

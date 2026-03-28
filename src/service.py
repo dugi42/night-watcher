@@ -21,10 +21,11 @@ import logging
 import os
 import threading
 import time
+from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import cv2
 from fastapi import FastAPI, HTTPException
@@ -95,15 +96,16 @@ class _DetectionConfig:
             # Overnight schedule (e.g. 22:00 → 06:00)
             return now >= start_t or now <= end_t
 
-    def snapshot(self) -> dict:
+    def snapshot(self) -> dict[str, Any]:
         """Return a copy of the current configuration as a plain dict.
 
         Returns
         -------
-        dict
+        dict[str, Any]
             Keys: ``enabled``, ``schedule_enabled``, ``schedule_start``,
-            ``schedule_end``.  Does not include ``active`` — call
-            :meth:`is_active` separately so the lock is not held twice.
+            ``schedule_end``, ``conf_threshold``.  Does not include
+            ``active`` — call :meth:`is_active` separately so the lock
+            is not held twice.
         """
         with self._lock:
             return {
@@ -259,7 +261,7 @@ _loop = DetectionLoop(_state, _config)
 
 
 @asynccontextmanager
-async def _lifespan(app: FastAPI):
+async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Start the detection loop on startup; stop it on shutdown."""
     _loop.start()
     yield
@@ -270,7 +272,7 @@ app = FastAPI(title="Night Watcher", version="1.0.0", lifespan=_lifespan)
 
 
 @app.get("/health", summary="Liveness probe")
-def health() -> dict:
+def health() -> dict[str, str]:
     """Return service status."""
     return {"status": "ok"}
 
@@ -291,7 +293,7 @@ def get_stream() -> StreamingResponse:
     Browsers can consume this directly via an <img> tag without CORS issues.
     """
 
-    def _generate():
+    def _generate() -> Generator[bytes, None, None]:
         while True:
             frame, _, _ = _state.snapshot()
             if frame:
@@ -305,7 +307,7 @@ def get_stream() -> StreamingResponse:
 
 
 @app.get("/status", summary="Current detection state")
-def get_status() -> dict:
+def get_status() -> dict[str, Any]:
     """Return the active session ID and currently detected classes."""
     _, classes, session_id = _state.snapshot()
     return {
@@ -340,7 +342,7 @@ class _DetectionConfigIn(BaseModel):
 
 
 @app.get("/detection/config", summary="Get detection configuration")
-def get_detection_config() -> dict:
+def get_detection_config() -> dict[str, Any]:
     """Return the current detection enable/schedule configuration."""
     cfg = _config.snapshot()
     cfg["active"] = _config.is_active()
@@ -348,7 +350,7 @@ def get_detection_config() -> dict:
 
 
 @app.post("/detection/config", summary="Update detection configuration")
-def post_detection_config(body: _DetectionConfigIn) -> dict:
+def post_detection_config(body: _DetectionConfigIn) -> dict[str, Any]:
     """Update the detection enable/schedule configuration."""
     _config.update(
         body.enabled,
@@ -368,7 +370,7 @@ def post_detection_config(body: _DetectionConfigIn) -> dict:
 
 
 @app.get("/detections", summary="All recorded detection sessions")
-def get_detections() -> list:
+def get_detections() -> list[dict[str, Any]]:
     """Return the full history of detection sessions from detections.json."""
     if not META_FILE.exists():
         return []

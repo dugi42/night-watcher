@@ -14,6 +14,7 @@ import logging
 import os
 from collections import Counter
 from datetime import datetime, time as dt_time
+from typing import Any
 
 import pandas as pd
 import requests
@@ -24,7 +25,7 @@ DEFAULT_URL = os.getenv("RASPI_URL", "http://raspi.local:8000")
 logger = logging.getLogger("night_watcher.client")
 
 
-def _post(path: str, base_url: str, payload: dict, timeout: float = 3.0):
+def _post(path: str, base_url: str, payload: dict[str, Any], timeout: float = 3.0) -> requests.Response | None:
     """Perform a POST request against the Pi service and return the response.
 
     Parameters
@@ -55,7 +56,7 @@ def _post(path: str, base_url: str, payload: dict, timeout: float = 3.0):
         return None
 
 
-def _get(path: str, base_url: str, timeout: float = 3.0):
+def _get(path: str, base_url: str, timeout: float = 3.0) -> requests.Response | None:
     """Perform a GET request against the Pi service and return the response.
 
     Parameters
@@ -126,7 +127,7 @@ def _render_sidebar() -> str:
             st.warning("Could not fetch detection config.")
             logger.warning("GET /detection/config failed for %s", url)
         else:
-            cfg = cfg_resp.json()
+            cfg: dict[str, Any] = cfg_resp.json()
             st.caption(f"Config loaded — HTTP {cfg_resp.status_code}")
             logger.debug("Detection config: %s", cfg)
 
@@ -171,7 +172,7 @@ def _render_sidebar() -> str:
                 result = _post("/detection/config", url, payload)
 
                 if result is not None:
-                    cfg_back = result.json()
+                    cfg_back: dict[str, Any] = result.json()
                     active_str = "active now" if cfg_back.get("active") else "inactive now"
                     if not cfg_back["enabled"]:
                         msg = f"Detection disabled — HTTP {result.status_code}"
@@ -273,10 +274,10 @@ def _render_stream_tab(url: str) -> None:
 
     resp = _get("/status", url)
     if resp is not None:
-        status = resp.json()
-        classes = ", ".join(status.get("detected_classes", [])) or "none"
-        sid = status.get("session_id") or ""
-        detection_active = status.get("detection_active", True)
+        status: dict[str, Any] = resp.json()
+        classes: str = ", ".join(status.get("detected_classes", [])) or "none"
+        sid: str = status.get("session_id") or ""
+        detection_active: bool = status.get("detection_active", True)
         logger.debug(
             "Status: detection_active=%s classes=%s session=%s",
             detection_active, classes, sid,
@@ -321,17 +322,17 @@ def _render_stats_tab(url: str) -> None:
         logger.error("GET /detections failed for %s", url)
         return
 
-    sessions: list[dict] = resp.json()
+    sessions: list[dict[str, Any]] = resp.json()
     logger.debug("Loaded %d detection sessions", len(sessions))
 
     if not sessions:
         st.info("No detection sessions recorded yet.")
         return
 
-    all_objects = [o for s in sessions for o in s.get("objects", [])]
-    class_counter = Counter(o["label"] for o in all_objects)
-    total_duration = sum(s.get("duration_seconds", 0.0) for s in sessions)
-    top_class = class_counter.most_common(1)[0][0] if class_counter else "—"
+    all_objects: list[dict[str, Any]] = [o for s in sessions for o in s.get("objects", [])]
+    class_counter: Counter[str] = Counter(o["label"] for o in all_objects)
+    total_duration: float = sum(s.get("duration_seconds", 0.0) for s in sessions)
+    top_class: str = class_counter.most_common(1)[0][0] if class_counter else "—"
 
     # Summary metrics
     c1, c2, c3, c4 = st.columns(4)
@@ -379,24 +380,24 @@ def _render_stats_tab(url: str) -> None:
 
     for session in reversed(sessions[-30:]):
         uid: str = session["uuid"]
-        start_dt = datetime.fromtimestamp(session["start_time"])
-        duration = session.get("duration_seconds", 0.0)
-        classes = ", ".join(sorted({o["label"] for o in session.get("objects", [])}))
+        start_dt: datetime = datetime.fromtimestamp(session["start_time"])
+        duration: float = session.get("duration_seconds", 0.0)
+        classes: str = ", ".join(sorted({o["label"] for o in session.get("objects", [])}))
 
         with st.expander(f"{start_dt:%Y-%m-%d %H:%M:%S}  —  {classes}  ({duration:.1f}s)"):
             left, right = st.columns([1, 2])
 
             with left:
                 st.write(f"**UUID:** `{uid}`")
-                end_ts = session.get("end_time")
-                end_dt = datetime.fromtimestamp(end_ts) if end_ts else None
+                end_ts: float | None = session.get("end_time")
+                end_dt: datetime | None = datetime.fromtimestamp(end_ts) if end_ts else None
                 st.write(
                     f"**Start:** {start_dt:%H:%M:%S}"
                     + (f"  →  **End:** {end_dt:%H:%M:%S}" if end_dt else "")
                 )
                 st.write(f"**Duration:** {duration:.1f}s")
 
-                obj_rows = [
+                obj_rows: list[dict[str, Any]] = [
                     {"Class": o["label"], "Duration (s)": round(o.get("duration_seconds", 0.0), 1)}
                     for o in session.get("objects", [])
                 ]

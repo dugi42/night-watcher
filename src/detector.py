@@ -11,8 +11,10 @@ is silently filtered.
 import logging
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
+from typing import Any
 
 import cv2
+import numpy as np
 from ultralytics import YOLO
 
 #: Animal classes from the COCO dataset that Night Watcher cares about.
@@ -44,7 +46,7 @@ class YoloDetector:
         self.class_names = self.model.names
         self.conf_threshold = conf_threshold
 
-    def detect(self, frame) -> list[dict]:
+    def detect(self, frame: np.ndarray) -> list[dict[str, Any]]:
         """Run inference on *frame* and return filtered detections.
 
         Parameters
@@ -76,7 +78,7 @@ class YoloDetector:
 
         return detections
 
-    def annotate(self, frame, detections: list[dict]):
+    def annotate(self, frame: np.ndarray, detections: list[dict[str, Any]]) -> np.ndarray:
         """Draw bounding boxes and labels onto a copy of *frame*.
 
         Parameters
@@ -102,7 +104,7 @@ class YoloDetector:
             )
         return annotated
 
-    def detect_and_annotate(self, frame) -> tuple:
+    def detect_and_annotate(self, frame: np.ndarray) -> tuple[np.ndarray, bool, list[dict[str, Any]]]:
         """Convenience method combining :meth:`detect` and :meth:`annotate`.
 
         Returns
@@ -132,11 +134,11 @@ class AsyncYoloDetector:
     def __init__(self, detector: YoloDetector) -> None:
         self.detector = detector
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="yolo")
-        self._future: Future | None = None
-        self._latest_detections: list[dict] = []
+        self._future: Future[list[dict[str, Any]]] | None = None
+        self._latest_detections: list[dict[str, Any]] = []
         self._lock = threading.Lock()
 
-    def process_frame(self, frame) -> tuple:
+    def process_frame(self, frame: np.ndarray) -> tuple[np.ndarray, bool, list[dict[str, Any]]]:
         """Submit *frame* for inference and return the latest annotated result.
 
         Frames are intentionally dropped when the worker is busy — only the

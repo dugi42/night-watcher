@@ -19,9 +19,10 @@ import logging
 import os
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger("night_watcher.tracker")
 
@@ -68,10 +69,10 @@ class DetectionTracker:
     def __init__(self, disappear_timeout: float = DISAPPEAR_TIMEOUT) -> None:
         self._timeout = disappear_timeout
         self._session: Optional[_Session] = None
-        self._on_start = None   # callback(session_id: str)
-        self._on_end = None     # callback(session_id: str)
+        self._on_start: Callable[[str], Any] | None = None
+        self._on_end: Callable[[str], Any] | None = None
 
-    def set_callbacks(self, on_start=None, on_end=None) -> None:
+    def set_callbacks(self, on_start: Callable[[str], Any] | None = None, on_end: Callable[[str], Any] | None = None) -> None:
         """Register lifecycle callbacks.
 
         Parameters
@@ -84,7 +85,7 @@ class DetectionTracker:
         self._on_start = on_start
         self._on_end = on_end
 
-    def update(self, detections: list[dict]) -> Optional[str]:
+    def update(self, detections: list[dict[str, Any]]) -> Optional[str]:
         """Process the current frame's detections and return the active session ID.
 
         Parameters
