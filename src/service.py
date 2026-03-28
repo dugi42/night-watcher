@@ -78,6 +78,7 @@ class _DetectionConfig:
         self.schedule_enabled: bool = False
         self.schedule_start: str = "20:00"
         self.schedule_end: str = "06:00"
+        self.conf_threshold: float = 0.35
 
     def is_active(self) -> bool:
         """Return True if detection should run right now."""
@@ -110,9 +111,17 @@ class _DetectionConfig:
                 "schedule_enabled": self.schedule_enabled,
                 "schedule_start": self.schedule_start,
                 "schedule_end": self.schedule_end,
+                "conf_threshold": self.conf_threshold,
             }
 
-    def update(self, enabled: bool, schedule_enabled: bool, schedule_start: str, schedule_end: str) -> None:
+    def update(
+        self,
+        enabled: bool,
+        schedule_enabled: bool,
+        schedule_start: str,
+        schedule_end: str,
+        conf_threshold: float,
+    ) -> None:
         """Atomically replace the full configuration.
 
         Parameters
@@ -129,12 +138,16 @@ class _DetectionConfig:
             Wall-clock time in ``HH:MM`` format at which detection ends.
             If earlier than *schedule_start* the schedule is treated as
             overnight (e.g. ``"22:00"`` → ``"06:00"``).
+        conf_threshold:
+            Minimum YOLO confidence score (0–1) for a detection to be
+            reported. Applied live without restarting the detection loop.
         """
         with self._lock:
             self.enabled = enabled
             self.schedule_enabled = schedule_enabled
             self.schedule_start = schedule_start
             self.schedule_end = schedule_end
+            self.conf_threshold = conf_threshold
 
 
 class DetectionLoop:
@@ -168,7 +181,7 @@ class DetectionLoop:
 
     def _run(self) -> None:
         """Main loop: open camera, run inference, update shared state."""
-        model_path = os.getenv("YOLO_MODEL_PATH", "/app/models/yolov8n.pt")
+        model_path = os.getenv("YOLO_MODEL_PATH", "/app/models/yolo11n.pt")
         logger.info("Loading YOLO model from %s", model_path)
         detector = YoloDetector(model_name=model_path, conf_threshold=0.35)
         async_detector = AsyncYoloDetector(detector)
@@ -189,6 +202,7 @@ class DetectionLoop:
         logger.info("Camera opened; entering capture loop")
 
         was_active = True
+        last_conf = detector.conf_threshold
         try:
             while self._running:
                 ret, frame = read_frame(cap)
@@ -197,13 +211,22 @@ class DetectionLoop:
                     time.sleep(0.1)
                     continue
 
+                # Sync confidence threshold from config without restarting
+                current_conf = self._config.snapshot()["conf_threshold"]
+                if current_conf != last_conf:
+                    detector.conf_threshold = current_conf
+                    last_conf = current_conf
+                    logger.info("Confidence threshold updated to %.2f", current_conf)
+
                 detection_active = self._config.is_active()
 
                 if detection_active:
                     annotated, _, detections = async_detector.process_frame(frame)
                     session_id = tracker.update(detections)
                     if recorder.is_recording:
-                        recorder.write_frame(frame)
+                        # Write annotated frame so stored video includes
+                        # bounding boxes, labels, and confidence scores
+                        recorder.write_frame(annotated)
                 else:
                     if was_active:
                         # Transition: active → inactive — end any open session
@@ -313,6 +336,7 @@ class _DetectionConfigIn(BaseModel):
     schedule_enabled: bool
     schedule_start: str = "20:00"
     schedule_end: str = "06:00"
+    conf_threshold: float = 0.35
 
 
 @app.get("/detection/config", summary="Get detection configuration")
@@ -326,10 +350,17 @@ def get_detection_config() -> dict:
 @app.post("/detection/config", summary="Update detection configuration")
 def post_detection_config(body: _DetectionConfigIn) -> dict:
     """Update the detection enable/schedule configuration."""
-    _config.update(body.enabled, body.schedule_enabled, body.schedule_start, body.schedule_end)
+    _config.update(
+        body.enabled,
+        body.schedule_enabled,
+        body.schedule_start,
+        body.schedule_end,
+        body.conf_threshold,
+    )
     logger.info(
-        "Detection config updated: enabled=%s schedule=%s %s-%s",
+        "Detection config updated: enabled=%s schedule=%s %s-%s conf=%.2f",
         body.enabled, body.schedule_enabled, body.schedule_start, body.schedule_end,
+        body.conf_threshold,
     )
     cfg = _config.snapshot()
     cfg["active"] = _config.is_active()

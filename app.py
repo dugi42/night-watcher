@@ -104,10 +104,10 @@ def _render_sidebar() -> str:
 
         resp = _get("/health", url, timeout=2.0)
         if resp is not None:
-            st.success("Pi reachable")
+            st.success(f"Pi reachable — HTTP {resp.status_code}")
             logger.debug("Health check OK: %s", url)
         else:
-            st.error("Pi unreachable")
+            st.error("Pi unreachable — no response")
             logger.warning("Health check failed: %s", url)
 
         st.divider()
@@ -127,6 +127,7 @@ def _render_sidebar() -> str:
             logger.warning("GET /detection/config failed for %s", url)
         else:
             cfg = cfg_resp.json()
+            st.caption(f"Config loaded — HTTP {cfg_resp.status_code}")
             logger.debug("Detection config: %s", cfg)
 
             enabled = st.toggle("Detection Enabled", value=cfg.get("enabled", True))
@@ -148,12 +149,23 @@ def _render_sidebar() -> str:
                     h, m = map(int, cfg.get("schedule_end", "06:00").split(":"))
                     end_time = st.time_input("Active until", value=dt_time(h, m))
 
+            conf_threshold = st.slider(
+                "Confidence Threshold",
+                min_value=0.10,
+                max_value=0.90,
+                value=float(cfg.get("conf_threshold", 0.35)),
+                step=0.05,
+                disabled=not enabled,
+                help="Minimum YOLO confidence score for a detection to be recorded.",
+            )
+
             if st.button("Apply", type="primary"):
                 payload = {
                     "enabled": enabled,
                     "schedule_enabled": schedule_enabled,
                     "schedule_start": start_time.strftime("%H:%M"),
                     "schedule_end": end_time.strftime("%H:%M"),
+                    "conf_threshold": conf_threshold,
                 }
                 logger.info("Applying detection config: %s", payload)
                 result = _post("/detection/config", url, payload)
@@ -162,14 +174,18 @@ def _render_sidebar() -> str:
                     cfg_back = result.json()
                     active_str = "active now" if cfg_back.get("active") else "inactive now"
                     if not cfg_back["enabled"]:
-                        msg = "Detection disabled"
+                        msg = f"Detection disabled — HTTP {result.status_code}"
                     elif cfg_back["schedule_enabled"]:
                         msg = (
                             f"Schedule set: {cfg_back['schedule_start']} → "
                             f"{cfg_back['schedule_end']} ({active_str})"
+                            f" — HTTP {result.status_code}"
                         )
                     else:
-                        msg = f"Detection enabled ({active_str})"
+                        msg = (
+                            f"Detection enabled, threshold {cfg_back['conf_threshold']:.0%}"
+                            f" ({active_str}) — HTTP {result.status_code}"
+                        )
                     st.session_state["cfg_feedback"] = ("success", msg)
                     logger.info("Detection config accepted by Pi: %s", cfg_back)
                 else:
@@ -269,6 +285,7 @@ def _render_stream_tab(url: str) -> None:
         col1.metric("Detection", "Active" if detection_active else "Paused")
         col2.metric("Detected", classes)
         col3.metric("Session", sid[:8] + "…" if sid else "—")
+        st.caption(f"Status — HTTP {resp.status_code}")
         if not detection_active:
             st.info("Detection is currently paused. Enable it in the sidebar.")
     else:

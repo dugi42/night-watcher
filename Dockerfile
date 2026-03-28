@@ -21,14 +21,15 @@ RUN uv sync --no-dev --no-group client --no-install-project --frozen
 # Use the project virtualenv for all subsequent commands
 ENV PATH="/app/.venv/bin:${PATH}"
 ENV YOLO_CONFIG_DIR="/tmp"
-ENV YOLO_MODEL_PATH="/app/models/yolov8n.pt"
+ENV YOLO_MODEL_PATH="/app/models/yolo11n.pt"
 ENV ASSETS_DIR="/assets"
 
-# Pre-download YOLO weights into the image so the container starts immediately
+# Pre-download YOLO11n weights into the image so the container starts immediately.
+# YOLO11n is the current best nano model for ARM/CPU edge devices, replacing YOLOv8n.
 RUN mkdir -p /tmp/Ultralytics /app/models \
     && chmod -R 777 /tmp/Ultralytics \
-    && uv run python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')" \
-    && mv /app/yolov8n.pt /app/models/yolov8n.pt
+    && uv run python -c "from ultralytics import YOLO; YOLO('yolo11n.pt')" \
+    && mv /app/yolo11n.pt /app/models/yolo11n.pt
 
 # Copy application code (after dependency install to maximise layer caching)
 COPY . .
