@@ -109,13 +109,54 @@ def _render_stream_tab(url: str) -> None:
 
     st.components.v1.html(
         f"""
-        <img
+        <style>
+          #stream-wrapper {{
+            resize: both;
+            overflow: hidden;
+            width: 100%;
+            height: 480px;
+            min-width: 200px;
+            min-height: 150px;
+            border-radius: 6px;
+            box-sizing: border-box;
+            position: relative;
+          }}
+          #stream-wrapper img {{
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+            border-radius: 6px;
+          }}
+          /* Subtle resize-handle hint */
+          #stream-wrapper::after {{
+            content: "";
+            position: absolute;
+            bottom: 4px;
+            right: 4px;
+            width: 12px;
+            height: 12px;
+            background: linear-gradient(
+              135deg,
+              transparent 40%,
+              rgba(255,255,255,0.5) 40%,
+              rgba(255,255,255,0.5) 55%,
+              transparent 55%,
+              transparent 65%,
+              rgba(255,255,255,0.5) 65%
+            );
+            pointer-events: none;
+          }}
+        </style>
+        <div id="stream-wrapper">
+          <img
             src="{stream_url}"
-            style="width:100%;height:auto;border-radius:6px;"
             onerror="this.alt='Stream unavailable — is the Pi running?'"
-        />
+          />
+        </div>
         """,
-        height=500,
+        height=820,
+        scrolling=False,
     )
 
     resp = _get("/status", url)
