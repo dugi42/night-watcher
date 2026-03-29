@@ -10,11 +10,15 @@ services:
     devices:
       # Adjust if your camera is not /dev/video0
       - "/dev/video0:/dev/video0"
+      # VideoCore mailbox — required for vcgencmd to read throttle/voltage status
+      - "/dev/vcio:/dev/vcio"
     volumes:
       # Persist recorded videos, detection metadata, and logs on the host
       - ./assets:/assets
       # Docker socket (read-only) so /health/docker can list containers
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # vcgencmd binary from the host so /health/power can query throttle status
+      - /usr/bin/vcgencmd:/usr/bin/vcgencmd:ro
     environment:
       - PYTHONUNBUFFERED=1
       - CAMERA_DEVICE=/dev/video0

@@ -1,11 +1,13 @@
 """System health and Docker service monitoring.
 
 Provides functions to collect Raspberry Pi system metrics (CPU, memory, disk,
-temperature) via psutil, and to enumerate running Docker containers via the
-Docker Python SDK (requires /var/run/docker.sock mounted read-only).
+temperature) via psutil, enumerate running Docker containers via the Docker
+Python SDK (requires /var/run/docker.sock mounted read-only), and read
+power/throttle status via vcgencmd (requires /dev/vcio device access).
 """
 from __future__ import annotations
 
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -133,6 +135,83 @@ def get_docker_services() -> list[dict[str, str]]:
                 "created": "",
             }
         ]
+
+
+def get_power_status() -> dict[str, Any]:
+    """Return Raspberry Pi power and throttle status via ``vcgencmd get_throttled``.
+
+    Requires the ``vcgencmd`` binary (bind-mounted from the host) and the
+    ``/dev/vcio`` device to be accessible inside the container.
+
+    The returned bitmask flags distinguish *current* state (bits 0–3) from
+    *has-occurred-since-boot* state (bits 16–19).  A healthy, well-powered Pi
+    returns ``throttled=0x0``.
+
+    Returns
+    -------
+    dict[str, Any]
+        Keys:
+
+        ``throttled_raw`` (str)
+            Raw hex value from vcgencmd, e.g. ``"0x50005"``.
+        ``under_voltage_now`` (bool)
+            Voltage currently below 4.63 V.
+        ``freq_capped_now`` (bool)
+            ARM frequency currently capped due to thermal or power limit.
+        ``throttled_now`` (bool)
+            CPU currently throttled.
+        ``soft_temp_limit_now`` (bool)
+            Soft temperature limit currently active.
+        ``under_voltage_occurred`` (bool)
+            Under-voltage detected at any point since last boot.
+        ``freq_capping_occurred`` (bool)
+            Frequency capping occurred since last boot.
+        ``throttling_occurred`` (bool)
+            CPU throttling occurred since last boot.
+        ``soft_temp_limit_occurred`` (bool)
+            Soft temperature limit was hit since last boot.
+        ``healthy`` (bool | None)
+            ``True`` if throttled value is 0x0, ``False`` if any flag is set,
+            ``None`` if vcgencmd is unavailable.
+        ``error`` (str | None)
+            Error message when vcgencmd cannot be called.
+    """
+    try:
+        result = subprocess.run(
+            ["vcgencmd", "get_throttled"],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        )
+        raw = result.stdout.strip()  # e.g. "throttled=0x50005"
+        if "=" not in raw:
+            return {"error": f"Unexpected vcgencmd output: {raw!r}", "healthy": None}
+
+        val_str = raw.split("=", 1)[1]
+        throttled = int(val_str, 16)
+
+        return {
+            "throttled_raw": hex(throttled),
+            "under_voltage_now": bool(throttled & 0x1),
+            "freq_capped_now": bool(throttled & 0x2),
+            "throttled_now": bool(throttled & 0x4),
+            "soft_temp_limit_now": bool(throttled & 0x8),
+            "under_voltage_occurred": bool(throttled & 0x10000),
+            "freq_capping_occurred": bool(throttled & 0x20000),
+            "throttling_occurred": bool(throttled & 0x40000),
+            "soft_temp_limit_occurred": bool(throttled & 0x80000),
+            "healthy": throttled == 0,
+            "error": None,
+        }
+    except FileNotFoundError:
+        return {
+            "error": "vcgencmd not found — mount /usr/bin/vcgencmd and /dev/vcio",
+            "healthy": None,
+        }
+    except subprocess.TimeoutExpired:
+        return {"error": "vcgencmd timed out", "healthy": None}
+    except Exception as exc:
+        return {"error": str(exc), "healthy": None}
 
 
 def _fmt_ports(ports: dict[str, Any]) -> str:

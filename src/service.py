@@ -38,7 +38,7 @@ from pydantic import BaseModel
 
 from src.camera import configure_camera, open_camera, read_frame, release_camera
 from src.detector import AsyncYoloDetector, YoloDetector
-from src.health import get_docker_services, get_system_health
+from src.health import get_docker_services, get_power_status, get_system_health
 from src.log_store import SQLiteLogHandler, query_logs
 from src.recorder import VideoRecorder
 from src.telemetry import AppMetrics, setup_telemetry
@@ -392,6 +392,18 @@ def health_detailed() -> dict[str, Any]:
 def health_docker() -> list[dict[str, str]]:
     """Return the list of Docker containers visible via the Docker socket."""
     return get_docker_services()
+
+
+@app.get("/health/power", summary="Raspberry Pi power and throttle status")
+def health_power() -> dict[str, Any]:
+    """Return the Pi's current and historical throttle/under-voltage flags.
+
+    Reads ``vcgencmd get_throttled`` (requires ``/dev/vcio`` and the
+    ``vcgencmd`` binary to be accessible inside the container).  A ``healthy``
+    value of ``true`` means no throttling or power issues have been detected
+    since the last boot.
+    """
+    return get_power_status()
 
 
 # ---------------------------------------------------------------------------

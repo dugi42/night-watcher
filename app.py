@@ -445,6 +445,68 @@ def _render_health_tab(url: str) -> None:
         Pi service base URL, e.g. ``"http://raspi.local:8000"``.
     """
 
+    @st.fragment(run_every=10)
+    def _power_status() -> None:
+        resp = _get("/health/power", url, timeout=4.0)
+        st.subheader("Power & Throttle Status")
+        st.caption(f"Refreshes every 10 s — last update {datetime.now().strftime('%H:%M:%S')}")
+
+        if resp is None:
+            st.warning("Could not fetch power status from Pi.")
+            return
+
+        p: dict[str, Any] = resp.json()
+
+        if p.get("error"):
+            st.warning(f"vcgencmd unavailable: {p['error']}")
+            return
+
+        healthy = p.get("healthy")
+        if healthy is True:
+            st.success("Power OK — no throttling or under-voltage detected since last boot")
+        elif healthy is False:
+            st.error("Power issue detected — check your USB-C power supply (minimum 5V / 3A)")
+
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric(
+            "Under-voltage now",
+            "⚡ YES" if p.get("under_voltage_now") else "✅ No",
+            help="Voltage currently below 4.63 V",
+        )
+        col2.metric(
+            "Throttled now",
+            "🔴 YES" if p.get("throttled_now") else "✅ No",
+            help="CPU currently throttled due to power or heat",
+        )
+        col3.metric(
+            "Under-voltage (ever)",
+            "⚡ YES" if p.get("under_voltage_occurred") else "✅ No",
+            help="Under-voltage occurred at any point since last boot",
+        )
+        col4.metric(
+            "Throttled (ever)",
+            "🔴 YES" if p.get("throttling_occurred") else "✅ No",
+            help="CPU throttling occurred since last boot",
+        )
+
+        with st.expander("All throttle flags"):
+            flags = {
+                "Under-voltage now": p.get("under_voltage_now"),
+                "Freq capped now": p.get("freq_capped_now"),
+                "Throttled now": p.get("throttled_now"),
+                "Soft temp limit now": p.get("soft_temp_limit_now"),
+                "Under-voltage occurred": p.get("under_voltage_occurred"),
+                "Freq capping occurred": p.get("freq_capping_occurred"),
+                "Throttling occurred": p.get("throttling_occurred"),
+                "Soft temp limit occurred": p.get("soft_temp_limit_occurred"),
+            }
+            rows = [
+                {"Flag": k, "State": "⚠️ YES" if v else "✅ No"}
+                for k, v in flags.items()
+            ]
+            st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+            st.caption(f"Raw throttled value: `{p.get('throttled_raw', '?')}`")
+
     @st.fragment(run_every=5)
     def _system_metrics() -> None:
         resp = _get("/health/detailed", url, timeout=4.0)
@@ -609,6 +671,8 @@ def _render_health_tab(url: str) -> None:
             height=min(400, 35 + len(rows) * 35),
         )
 
+    _power_status()
+    st.divider()
     _system_metrics()
     st.divider()
     _docker_services()

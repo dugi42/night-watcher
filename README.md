@@ -184,6 +184,7 @@ level filtering (DEBUG / INFO / WARNING / ERROR / CRITICAL).
 | `GET` | `/health` | Liveness probe |
 | `GET` | `/health/detailed` | System health — CPU, memory, disk, temperature, uptime |
 | `GET` | `/health/docker` | Docker container list (requires socket mount) |
+| `GET` | `/health/power` | Pi throttle/under-voltage status via `vcgencmd` |
 | `GET` | `/frame` | Latest annotated JPEG frame |
 | `GET` | `/stream` | MJPEG video stream |
 | `GET` | `/status` | Current detection state + frame age (JSON) |
