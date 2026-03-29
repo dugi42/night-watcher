@@ -99,7 +99,7 @@ def _render_sidebar() -> str:
         The Pi service base URL with any trailing slash stripped.
     """
     with st.sidebar:
-        st.image("assets/logo.jpeg", use_container_width=True)
+        st.image("assets/logo.jpeg", width="stretch")
         st.title("Night Watcher")
         url = st.text_input("Pi service URL", value=DEFAULT_URL)
 
@@ -425,7 +425,7 @@ def _render_stats_tab(url: str) -> None:
                     for o in session.get("objects", [])
                 ]
                 if obj_rows:
-                    st.dataframe(pd.DataFrame(obj_rows), hide_index=True, use_container_width=True)
+                    st.dataframe(pd.DataFrame(obj_rows), hide_index=True, width="stretch")
 
             with right:
                 video_url = f"{url}/video/{uid}"
@@ -504,7 +504,7 @@ def _render_health_tab(url: str) -> None:
                 {"Flag": k, "State": "⚠️ YES" if v else "✅ No"}
                 for k, v in flags.items()
             ]
-            st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
             st.caption(f"Raw throttled value: `{p.get('throttled_raw', '?')}`")
 
     @st.fragment(run_every=5)
@@ -589,7 +589,7 @@ def _render_health_tab(url: str) -> None:
                     "Created": svc.get("created", ""),
                 }
             )
-        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
 
     @st.fragment(run_every=5)
     def _app_metrics() -> None:
@@ -667,7 +667,7 @@ def _render_health_tab(url: str) -> None:
         st.dataframe(
             pd.DataFrame(rows),
             hide_index=True,
-            use_container_width=True,
+            width="stretch",
             height=min(400, 35 + len(rows) * 35),
         )
 
