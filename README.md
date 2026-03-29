@@ -55,7 +55,7 @@ no camera or GPU and connects to the Pi over the network.
 ### 1. Clone the repository
 
 ```bash
-ssh pi@raspi.local
+ssh pi@<your-pi-hostname>
 git clone <repo-url> night-watcher
 cd night-watcher
 ```
@@ -88,7 +88,7 @@ docker compose logs -f otel-collector
 
 ### 4. Prometheus UI
 
-Open `http://raspi.local:9090` to query metrics directly.
+Open `http://<your-pi-hostname>:9090` to query metrics directly.
 
 ### Persistent storage
 
@@ -122,7 +122,7 @@ pip install streamlit requests pandas
 ### Run the dashboard
 
 ```bash
-# Default — connects to http://raspi.local:8000
+# Default — connects to the URL set in DEFAULT_URL (app.py) or RASPI_URL env var
 streamlit run app.py
 
 # Custom Pi address
@@ -224,7 +224,7 @@ to a no-op provider — the application keeps running.
 ### Prometheus
 
 Prometheus scrapes the OTel Collector every 15 s and retains data for 30
-days.  Access the UI at `http://raspi.local:9090`.
+days.  Access the UI at `http://<your-pi-hostname>:9090`.
 
 Example queries:
 
@@ -257,7 +257,7 @@ dashboard query recent entries without SSH access to the Pi.
 | `YOLO_MODEL_PATH` | `/app/models/yolo11n.pt` | YOLO model weights path |
 | `ASSETS_DIR` | `/assets` | Root for video, metadata, and logs |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://otel-collector:4318` | OTel Collector HTTP endpoint |
-| `RASPI_URL` | `http://raspi.local:8000` | Pi service URL (client-side only) |
+| `RASPI_URL` | `http://<your-pi-hostname>:8000` | Pi service URL (client-side only) |
 
 ### Detection config (live, via dashboard or API)
 

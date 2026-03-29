@@ -20,7 +20,7 @@ import pandas as pd
 import requests
 import streamlit as st
 
-DEFAULT_URL = os.getenv("RASPI_URL", "http://raspi.local:8000")
+DEFAULT_URL = os.getenv("RASPI_URL", "http://raspberrypi.local:8000")
 
 logger = logging.getLogger("night_watcher.client")
 
