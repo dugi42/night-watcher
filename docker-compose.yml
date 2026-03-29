@@ -11,11 +11,52 @@ services:
       # Adjust if your camera is not /dev/video0
       - "/dev/video0:/dev/video0"
     volumes:
-      # Persist recorded videos and detection metadata on the host
+      # Persist recorded videos, detection metadata, and logs on the host
       - ./assets:/assets
+      # Docker socket (read-only) so /health/docker can list containers
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - PYTHONUNBUFFERED=1
       - CAMERA_DEVICE=/dev/video0
       - YOLO_CONFIG_DIR=/tmp
-      - YOLO_MODEL_PATH=/app/models/yolov8n.pt
+      - YOLO_MODEL_PATH=/app/models/yolo11n.pt
       - ASSETS_DIR=/assets
+      # Point the OTel SDK at the collector running in this compose stack
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+    depends_on:
+      - otel-collector
+
+  # ---------------------------------------------------------------------------
+  # OpenTelemetry Collector — receives OTLP from the app, exposes Prometheus
+  # scrape endpoint on :9464, writes trace/log data to stdout for debugging.
+  # ---------------------------------------------------------------------------
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    restart: unless-stopped
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "9464:9464"   # Prometheus scrape endpoint (metrics)
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+
+  # ---------------------------------------------------------------------------
+  # Prometheus — scrapes OTel Collector metrics; stores time-series data.
+  # Dashboard: http://<pi-host>:9090
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.enable-lifecycle"
+
+volumes:
+  prometheus_data:

@@ -12,6 +12,14 @@ dependencies = [
     "uvicorn[standard]",
     "pandas",
     "streamlit>=1.55.0",
+    # System health monitoring
+    "psutil>=5.9.0",
+    # Docker service monitoring (requires /var/run/docker.sock mount)
+    "docker>=7.0.0",
+    # OpenTelemetry — metrics and distributed traces
+    "opentelemetry-api>=1.25.0",
+    "opentelemetry-sdk>=1.25.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.25.0",
 ]
 
 [dependency-groups]

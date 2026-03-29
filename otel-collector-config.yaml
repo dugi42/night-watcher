@@ -1,0 +1,55 @@
+# OpenTelemetry Collector configuration for Night Watcher
+#
+# Pipeline:
+#   App (OTLP HTTP) → Collector → Prometheus scrape endpoint (metrics)
+#                               → stdout logging (traces + logs, for debug)
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 10s
+    send_batch_size: 1024
+
+  # Drop high-cardinality attributes that inflate Prometheus series count
+  attributes/sanitise:
+    actions:
+      - key: net.peer.ip
+        action: delete
+      - key: http.user_agent
+        action: delete
+
+exporters:
+  # Expose a Prometheus scrape endpoint so Prometheus can pull metrics
+  prometheus:
+    endpoint: "0.0.0.0:9464"
+    namespace: night_watcher
+    send_timestamps: true
+    enable_open_metrics: true
+
+  # Print traces and logs to stdout (visible via `docker compose logs`)
+  debug:
+    verbosity: normal
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch, attributes/sanitise]
+      exporters: [prometheus]
+
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]

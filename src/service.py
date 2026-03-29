@@ -7,9 +7,13 @@ so the Streamlit client can consume live video and detection history.
 Endpoints
 ---------
 GET /health                 Liveness probe.
+GET /health/detailed        System health (CPU, memory, disk, temperature).
+GET /health/docker          Running Docker container list.
 GET /frame                  Latest annotated JPEG frame (for polling clients).
 GET /stream                 MJPEG video stream (for browser <img> tags).
 GET /status                 Current detection state as JSON.
+GET /metrics/app            Application runtime metrics snapshot (JSON).
+GET /logs                   Recent structured log entries from SQLite.
 GET /detections             Full history of recorded sessions from detections.json.
 GET /video/{uuid}           Serve a recorded MP4 by session UUID.
 GET /detection/config       Current enable/schedule configuration.
@@ -28,24 +32,34 @@ from pathlib import Path
 from typing import Any, Optional
 
 import cv2
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from src.camera import configure_camera, open_camera, read_frame, release_camera
 from src.detector import AsyncYoloDetector, YoloDetector
+from src.health import get_docker_services, get_system_health
+from src.log_store import SQLiteLogHandler, query_logs
 from src.recorder import VideoRecorder
+from src.telemetry import AppMetrics, setup_telemetry
 from src.tracker import DetectionTracker
 from src.utils import setup_logging
 
 setup_logging()
 logger = logging.getLogger("night_watcher.service")
 
+# Attach SQLite log handler so all application logs are queryable via /logs
+_sqlite_handler = SQLiteLogHandler()
+_sqlite_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s — %(message)s"))
+logging.getLogger("night_watcher").addHandler(_sqlite_handler)
+
 ASSETS_DIR = Path(os.getenv("ASSETS_DIR", "/assets"))
 META_FILE = ASSETS_DIR / "meta" / "detections.json"
 VIDEO_DIR = ASSETS_DIR / "video"
 
 _JPEG_QUALITY = [cv2.IMWRITE_JPEG_QUALITY, 80]
+_TS_FONT = cv2.FONT_HERSHEY_SIMPLEX
+_TS_COLOR = (0, 255, 0)  # green
 
 
 class _State:
@@ -56,18 +70,26 @@ class _State:
         self.frame: Optional[bytes] = None
         self.detected_classes: list[str] = []
         self.session_id: Optional[str] = None
+        self.frame_captured_at: float = 0.0
 
-    def update(self, frame: bytes, classes: list[str], session_id: Optional[str]) -> None:
+    def update(
+        self,
+        frame: bytes,
+        classes: list[str],
+        session_id: Optional[str],
+        captured_at: float,
+    ) -> None:
         """Atomically replace the latest frame and detection state."""
         with self._lock:
             self.frame = frame
             self.detected_classes = classes
             self.session_id = session_id
+            self.frame_captured_at = captured_at
 
-    def snapshot(self) -> tuple[Optional[bytes], list[str], Optional[str]]:
-        """Return a consistent snapshot of (frame, classes, session_id)."""
+    def snapshot(self) -> tuple[Optional[bytes], list[str], Optional[str], float]:
+        """Return a consistent snapshot of (frame, classes, session_id, captured_at)."""
         with self._lock:
-            return self.frame, list(self.detected_classes), self.session_id
+            return self.frame, list(self.detected_classes), self.session_id, self.frame_captured_at
 
 
 class _DetectionConfig:
@@ -152,6 +174,47 @@ class _DetectionConfig:
             self.conf_threshold = conf_threshold
 
 
+class _AppStats:
+    """Thread-safe accumulator for application runtime metrics."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.frames_total: int = 0
+        self.sessions_total: int = 0
+        self.processing_ms_sum: float = 0.0
+        self.detections_by_class: dict[str, int] = {}
+        self.start_time: float = time.time()
+
+    def record_frame(self, processing_ms: float, detections: list[dict[str, Any]]) -> None:
+        """Record a processed frame and its detections."""
+        with self._lock:
+            self.frames_total += 1
+            self.processing_ms_sum += processing_ms
+            for d in detections:
+                cls = d["label"]
+                self.detections_by_class[cls] = self.detections_by_class.get(cls, 0) + 1
+
+    def record_session_start(self) -> None:
+        """Increment the session counter."""
+        with self._lock:
+            self.sessions_total += 1
+
+    def snapshot(self) -> dict[str, Any]:
+        """Return a JSON-serialisable snapshot of all runtime stats."""
+        with self._lock:
+            uptime = time.time() - self.start_time
+            avg_ms = self.processing_ms_sum / self.frames_total if self.frames_total else 0.0
+            fps = self.frames_total / uptime if uptime > 0 else 0.0
+            return {
+                "frames_total": self.frames_total,
+                "sessions_total": self.sessions_total,
+                "avg_processing_ms": round(avg_ms, 2),
+                "fps_avg": round(fps, 2),
+                "detections_by_class": dict(self.detections_by_class),
+                "uptime_seconds": round(uptime),
+            }
+
+
 class DetectionLoop:
     """Runs the camera capture and YOLO inference loop in a daemon thread.
 
@@ -161,9 +224,17 @@ class DetectionLoop:
     annotated JPEG is stored in shared state for the API to serve.
     """
 
-    def __init__(self, state: _State, config: "_DetectionConfig") -> None:
+    def __init__(
+        self,
+        state: _State,
+        config: "_DetectionConfig",
+        stats: _AppStats,
+        otel: AppMetrics,
+    ) -> None:
         self._state = state
         self._config = config
+        self._stats = stats
+        self._otel = otel
         self._running = False
         self._thread: Optional[threading.Thread] = None
 
@@ -190,8 +261,14 @@ class DetectionLoop:
 
         recorder = VideoRecorder()
         tracker = DetectionTracker()
+
+        def _on_session_start(session_id: str) -> None:
+            recorder.start(session_id)
+            self._stats.record_session_start()
+            self._otel.sessions_started.add(1)
+
         tracker.set_callbacks(
-            on_start=recorder.start,
+            on_start=_on_session_start,
             on_end=lambda _: recorder.stop(),
         )
 
@@ -207,6 +284,7 @@ class DetectionLoop:
         last_conf = detector.conf_threshold
         try:
             while self._running:
+                frame_start = time.perf_counter()
                 ret, frame = read_frame(cap)
                 if not ret:
                     logger.warning("Failed to read frame; retrying")
@@ -241,10 +319,27 @@ class DetectionLoop:
 
                 was_active = detection_active
 
+                processing_ms = (time.perf_counter() - frame_start) * 1000.0
+
+                # Overlay live timestamp on every frame so the stream shows
+                # real-time clock — confirms the feed is actually live
+                ts_text = datetime.now().strftime("%H:%M:%S")
+                h, w = annotated.shape[:2]
+                cv2.putText(
+                    annotated, ts_text, (8, h - 10),
+                    _TS_FONT, 0.65, _TS_COLOR, 2, cv2.LINE_AA,
+                )
+
                 ok, buf = cv2.imencode(".jpg", annotated, _JPEG_QUALITY)
                 if ok:
+                    captured_at = time.time()
                     classes = sorted({d["label"] for d in detections})
-                    self._state.update(buf.tobytes(), classes, session_id)
+                    self._state.update(buf.tobytes(), classes, session_id, captured_at)
+                    self._stats.record_frame(processing_ms, detections)
+                    self._otel.frames_processed.add(1)
+                    self._otel.frame_processing_ms.record(processing_ms)
+                    for d in detections:
+                        self._otel.detections_total.add(1, {"class": d["label"]})
 
                 time.sleep(0.05)  # ~20 FPS target
         finally:
@@ -257,12 +352,17 @@ class DetectionLoop:
 
 _state = _State()
 _config = _DetectionConfig()
-_loop = DetectionLoop(_state, _config)
+_stats = _AppStats()
+_otel: Optional[AppMetrics] = None
+_loop: Optional[DetectionLoop] = None
 
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Start the detection loop on startup; stop it on shutdown."""
+    """Start telemetry and detection loop on startup; stop on shutdown."""
+    global _otel, _loop
+    _otel = setup_telemetry()
+    _loop = DetectionLoop(_state, _config, _stats, _otel)
     _loop.start()
     yield
     _loop.stop()
@@ -271,16 +371,38 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 app = FastAPI(title="Night Watcher", version="1.0.0", lifespan=_lifespan)
 
 
+# ---------------------------------------------------------------------------
+# Health endpoints
+# ---------------------------------------------------------------------------
+
+
 @app.get("/health", summary="Liveness probe")
 def health() -> dict[str, str]:
     """Return service status."""
     return {"status": "ok"}
 
 
+@app.get("/health/detailed", summary="Detailed system health")
+def health_detailed() -> dict[str, Any]:
+    """Return CPU, memory, disk, temperature and uptime for the host Pi."""
+    return get_system_health()
+
+
+@app.get("/health/docker", summary="Docker container status")
+def health_docker() -> list[dict[str, str]]:
+    """Return the list of Docker containers visible via the Docker socket."""
+    return get_docker_services()
+
+
+# ---------------------------------------------------------------------------
+# Video stream endpoints
+# ---------------------------------------------------------------------------
+
+
 @app.get("/frame", summary="Latest annotated JPEG frame")
 def get_frame() -> Response:
     """Return the most recent annotated camera frame as a JPEG image."""
-    frame, _, _ = _state.snapshot()
+    frame, _, _, _ = _state.snapshot()
     if frame is None:
         raise HTTPException(status_code=503, detail="No frame available yet")
     return Response(content=frame, media_type="image/jpeg")
@@ -295,7 +417,7 @@ def get_stream() -> StreamingResponse:
 
     def _generate() -> Generator[bytes, None, None]:
         while True:
-            frame, _, _ = _state.snapshot()
+            frame, _, _, _ = _state.snapshot()
             if frame:
                 yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
             time.sleep(0.05)
@@ -306,16 +428,61 @@ def get_stream() -> StreamingResponse:
     )
 
 
+# ---------------------------------------------------------------------------
+# Detection state endpoints
+# ---------------------------------------------------------------------------
+
+
 @app.get("/status", summary="Current detection state")
 def get_status() -> dict[str, Any]:
-    """Return the active session ID and currently detected classes."""
-    _, classes, session_id = _state.snapshot()
+    """Return the active session ID, currently detected classes, and frame age."""
+    _, classes, session_id, captured_at = _state.snapshot()
+    frame_age_ms = round((time.time() - captured_at) * 1000) if captured_at else None
     return {
         "detecting": len(classes) > 0,
         "detection_active": _config.is_active(),
         "session_id": session_id,
         "detected_classes": classes,
+        "frame_captured_at": captured_at,
+        "frame_age_ms": frame_age_ms,
     }
+
+
+# ---------------------------------------------------------------------------
+# Metrics & logs endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get("/metrics/app", summary="Application runtime metrics")
+def get_app_metrics() -> dict[str, Any]:
+    """Return a JSON snapshot of frames processed, FPS, detection counts, etc."""
+    return _stats.snapshot()
+
+
+@app.get("/logs", summary="Recent structured log entries")
+def get_logs(
+    limit: int = Query(default=200, ge=1, le=1000),
+    level: Optional[str] = Query(default=None),
+    since: Optional[float] = Query(default=None),
+) -> list[dict[str, Any]]:
+    """Return recent application log entries stored in SQLite.
+
+    Parameters
+    ----------
+    limit:
+        Max entries to return (1–1000, default 200).
+    level:
+        Filter to a specific level: ``DEBUG``, ``INFO``, ``WARNING``,
+        ``ERROR``, ``CRITICAL``.  Omit for all levels.
+    since:
+        UNIX timestamp; only return entries newer than this value.
+    """
+    return query_logs(limit=limit, level=level, since=since)
+
+
+# ---------------------------------------------------------------------------
+# Detection config endpoints
+# ---------------------------------------------------------------------------
 
 
 class _DetectionConfigIn(BaseModel):
@@ -367,6 +534,11 @@ def post_detection_config(body: _DetectionConfigIn) -> dict[str, Any]:
     cfg = _config.snapshot()
     cfg["active"] = _config.is_active()
     return cfg
+
+
+# ---------------------------------------------------------------------------
+# Detection history & video endpoints
+# ---------------------------------------------------------------------------
 
 
 @app.get("/detections", summary="All recorded detection sessions")

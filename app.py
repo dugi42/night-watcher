@@ -1,9 +1,9 @@
 """Streamlit client for Night Watcher — runs on your local machine.
 
 Connects to the FastAPI detection service running on the Raspberry Pi and
-displays a live MJPEG stream alongside detection statistics and recorded video
-clips. Configure the Pi URL via the RASPI_URL environment variable or the
-sidebar input.
+displays a live MJPEG stream alongside detection statistics, health
+monitoring, and recorded video clips.  Configure the Pi URL via the
+RASPI_URL environment variable or the sidebar input.
 
 Usage
 -----
@@ -202,15 +202,12 @@ def _render_sidebar() -> str:
 
 
 def _render_stream_tab(url: str) -> None:
-    """Render the live MJPEG stream and current detection status metrics.
+    """Render the live MJPEG stream with frame timestamp and full-screen controls.
 
     The stream is embedded via an HTML ``<img>`` tag pointing directly at the
-    Pi's MJPEG endpoint; the browser handles continuous updates without
-    Streamlit needing to poll for frames. The wrapper ``<div>`` has
-    ``resize: both`` so the user can drag it to any size.
-
-    Below the stream, metrics from ``/status`` show whether detection is
-    active, what classes are currently visible, and the active session ID.
+    Pi's MJPEG endpoint.  A timestamp overlay is burned into every frame
+    server-side so viewers can confirm the feed is live.  A full-screen
+    button opens the raw MJPEG URL in a new browser tab.
 
     Parameters
     ----------
@@ -219,6 +216,19 @@ def _render_stream_tab(url: str) -> None:
     """
     stream_url = f"{url}/stream"
     logger.debug("Rendering stream from %s", stream_url)
+
+    # Header row: title + full-screen link
+    col_title, col_fs = st.columns([6, 1])
+    with col_title:
+        st.subheader("Live Camera Feed")
+    with col_fs:
+        st.markdown(
+            f'<a href="{stream_url}" target="_blank">'
+            '<button style="margin-top:8px;padding:6px 14px;border-radius:6px;'
+            "border:1px solid #555;background:#1e1e2e;color:#cdd6f4;"
+            'cursor:pointer;font-size:13px;">⛶ Full Screen</button></a>',
+            unsafe_allow_html=True,
+        )
 
     st.components.v1.html(
         f"""
@@ -233,6 +243,7 @@ def _render_stream_tab(url: str) -> None:
             border-radius: 6px;
             box-sizing: border-box;
             position: relative;
+            background: #000;
           }}
           #stream-wrapper img {{
             width: 100%;
@@ -263,12 +274,13 @@ def _render_stream_tab(url: str) -> None:
         </style>
         <div id="stream-wrapper">
           <img
+            id="stream-img"
             src="{stream_url}"
             onerror="this.alt='Stream unavailable — is the Pi running?'"
           />
         </div>
         """,
-        height=820,
+        height=500,
         scrolling=False,
     )
 
@@ -278,14 +290,25 @@ def _render_stream_tab(url: str) -> None:
         classes: str = ", ".join(status.get("detected_classes", [])) or "none"
         sid: str = status.get("session_id") or ""
         detection_active: bool = status.get("detection_active", True)
+        frame_age_ms: int | None = status.get("frame_age_ms")
+        captured_at: float | None = status.get("frame_captured_at")
+
         logger.debug(
             "Status: detection_active=%s classes=%s session=%s",
             detection_active, classes, sid,
         )
-        col1, col2, col3 = st.columns(3)
+
+        col1, col2, col3, col4 = st.columns(4)
         col1.metric("Detection", "Active" if detection_active else "Paused")
         col2.metric("Detected", classes)
         col3.metric("Session", sid[:8] + "…" if sid else "—")
+
+        if captured_at and frame_age_ms is not None:
+            frame_ts = datetime.fromtimestamp(captured_at).strftime("%H:%M:%S")
+            col4.metric("Last Frame", frame_ts, delta=f"{frame_age_ms} ms ago", delta_color="off")
+        else:
+            col4.metric("Last Frame", "—")
+
         st.caption(f"Status — HTTP {resp.status_code}")
         if not detection_active:
             st.info("Detection is currently paused. Enable it in the sidebar.")
@@ -409,11 +432,214 @@ def _render_stats_tab(url: str) -> None:
                 st.video(video_url)
 
 
+def _render_health_tab(url: str) -> None:
+    """Render system health, Docker service status, app metrics, and logs.
+
+    Polls the Pi's ``/health/detailed``, ``/health/docker``,
+    ``/metrics/app``, and ``/logs`` endpoints.  Uses ``st.fragment`` with
+    ``run_every`` for lightweight auto-refresh without a full page reload.
+
+    Parameters
+    ----------
+    url:
+        Pi service base URL, e.g. ``"http://raspi.local:8000"``.
+    """
+
+    @st.fragment(run_every=5)
+    def _system_metrics() -> None:
+        resp = _get("/health/detailed", url, timeout=4.0)
+        if resp is None:
+            st.warning("Could not fetch system health from Pi.")
+            return
+
+        h: dict[str, Any] = resp.json()
+        st.subheader("System Health")
+        st.caption(f"Refreshes every 5 s — last update {datetime.now().strftime('%H:%M:%S')}")
+
+        cpu = h.get("cpu", {})
+        mem = h.get("memory", {})
+        disk = h.get("disk", {})
+        temp = h.get("temperature_c")
+        uptime_s = h.get("uptime_seconds", 0)
+
+        # Uptime formatted
+        uptime_str = _fmt_uptime(uptime_s)
+
+        # Top-level KPIs
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("CPU", f"{cpu.get('percent', '?')}%",
+                  help=f"{cpu.get('count')} cores @ {cpu.get('frequency_mhz')} MHz")
+        k2.metric("Memory", f"{mem.get('percent', '?')}%",
+                  help=f"{mem.get('used_mb')} / {mem.get('total_mb')} MB used")
+        k3.metric("Disk", f"{disk.get('percent', '?')}%",
+                  help=f"{disk.get('used_gb')} / {disk.get('total_gb')} GB used")
+        if temp is not None:
+            color = "🟢" if temp < 60 else ("🟡" if temp < 75 else "🔴")
+            k4.metric("Temperature", f"{color} {temp} °C")
+        else:
+            k4.metric("Temperature", "N/A")
+
+        # Progress bars
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.write("**CPU Usage**")
+            st.progress(cpu.get("percent", 0) / 100,
+                        text=f"{cpu.get('percent')}% — {cpu.get('frequency_mhz')} MHz")
+            st.write("**Memory**")
+            st.progress(mem.get("percent", 0) / 100,
+                        text=f"{mem.get('used_mb')} MB / {mem.get('total_mb')} MB")
+        with col_b:
+            st.write("**Disk (assets)**")
+            st.progress(disk.get("percent", 0) / 100,
+                        text=f"{disk.get('used_gb')} GB / {disk.get('total_gb')} GB free: {disk.get('free_gb')} GB")
+            swap = h.get("swap", {})
+            if swap.get("total_mb", 0) > 0:
+                st.write("**Swap**")
+                st.progress(swap.get("percent", 0) / 100,
+                            text=f"{swap.get('used_mb')} MB / {swap.get('total_mb')} MB")
+
+        st.caption(f"Uptime: {uptime_str}")
+
+    @st.fragment(run_every=10)
+    def _docker_services() -> None:
+        st.subheader("Docker Services")
+        resp = _get("/health/docker", url, timeout=5.0)
+        if resp is None:
+            st.warning("Could not fetch Docker service list from Pi.")
+            return
+
+        services: list[dict[str, str]] = resp.json()
+        if not services:
+            st.info("No containers found.")
+            return
+
+        rows = []
+        for svc in services:
+            state = svc.get("state", "")
+            icon = "🟢" if state == "running" else ("🔴" if state in ("exited", "dead") else "🟡")
+            rows.append(
+                {
+                    "": icon,
+                    "Name": svc.get("name", ""),
+                    "Image": svc.get("image", ""),
+                    "Status": svc.get("status", ""),
+                    "Ports": svc.get("ports", ""),
+                    "Created": svc.get("created", ""),
+                }
+            )
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+    @st.fragment(run_every=5)
+    def _app_metrics() -> None:
+        st.subheader("Application Metrics")
+        resp = _get("/metrics/app", url, timeout=3.0)
+        if resp is None:
+            st.warning("Could not fetch application metrics from Pi.")
+            return
+
+        m: dict[str, Any] = resp.json()
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Frames Processed", f"{m.get('frames_total', 0):,}")
+        c2.metric("Avg FPS", f"{m.get('fps_avg', 0):.1f}")
+        c3.metric("Avg Frame Time", f"{m.get('avg_processing_ms', 0):.1f} ms")
+        c4.metric("Sessions", m.get("sessions_total", 0))
+
+        dbc: dict[str, int] = m.get("detections_by_class", {})
+        if dbc:
+            st.write("**Detections by class (since startup)**")
+            df = pd.DataFrame(
+                sorted(dbc.items(), key=lambda x: -x[1]),
+                columns=["Class", "Count"],
+            ).set_index("Class")
+            st.bar_chart(df)
+
+    @st.fragment(run_every=10)
+    def _log_viewer() -> None:
+        st.subheader("Application Logs")
+        col_lvl, col_lim, col_ref = st.columns([2, 2, 1])
+        with col_lvl:
+            level_filter = st.selectbox(
+                "Level", ["ALL", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+                index=2, key="log_level_filter",
+            )
+        with col_lim:
+            log_limit = st.number_input(
+                "Max entries", min_value=10, max_value=500, value=100, step=10,
+                key="log_limit",
+            )
+        with col_ref:
+            st.write("")
+            st.write("")
+            if st.button("Refresh logs"):
+                st.rerun(scope="fragment")
+
+        lvl_param = None if level_filter == "ALL" else level_filter
+        resp = _get(
+            f"/logs?limit={int(log_limit)}"
+            + (f"&level={lvl_param}" if lvl_param else ""),
+            url,
+            timeout=5.0,
+        )
+        if resp is None:
+            st.warning("Could not fetch logs from Pi.")
+            return
+
+        log_entries: list[dict[str, Any]] = resp.json()
+        if not log_entries:
+            st.info("No log entries found.")
+            return
+
+        rows = []
+        for entry in log_entries:
+            ts = datetime.fromtimestamp(entry["timestamp"]).strftime("%H:%M:%S")
+            level = entry.get("level", "")
+            icon = {"DEBUG": "⚪", "INFO": "🔵", "WARNING": "🟡", "ERROR": "🔴", "CRITICAL": "🟣"}.get(level, "⚫")
+            rows.append(
+                {
+                    "Time": ts,
+                    "Level": f"{icon} {level}",
+                    "Logger": entry.get("logger", ""),
+                    "Message": entry.get("message", ""),
+                }
+            )
+        st.dataframe(
+            pd.DataFrame(rows),
+            hide_index=True,
+            use_container_width=True,
+            height=min(400, 35 + len(rows) * 35),
+        )
+
+    _system_metrics()
+    st.divider()
+    _docker_services()
+    st.divider()
+    _app_metrics()
+    st.divider()
+    _log_viewer()
+
+
+def _fmt_uptime(seconds: int) -> str:
+    """Format uptime seconds as a human-readable string."""
+    d, rem = divmod(int(seconds), 86400)
+    h, rem = divmod(rem, 3600)
+    m, s = divmod(rem, 60)
+    parts = []
+    if d:
+        parts.append(f"{d}d")
+    if h:
+        parts.append(f"{h}h")
+    if m:
+        parts.append(f"{m}m")
+    parts.append(f"{s}s")
+    return " ".join(parts)
+
+
 def main() -> None:
     """Entry point for the Streamlit client application.
 
     Configures the page, sets up logging, renders the sidebar (which returns
-    the active Pi URL), then renders the Live Stream and Statistics tabs.
+    the active Pi URL), then renders the Live Stream, Statistics, and Health
+    tabs.
     """
     logging.basicConfig(
         level=logging.INFO,
@@ -430,13 +656,18 @@ def main() -> None:
 
     url = _render_sidebar()
 
-    tab_stream, tab_stats = st.tabs(["📷 Live Stream", "📊 Statistics"])
+    tab_stream, tab_stats, tab_health = st.tabs(
+        ["📷 Live Stream", "📊 Statistics", "🩺 Health"]
+    )
 
     with tab_stream:
         _render_stream_tab(url)
 
     with tab_stats:
         _render_stats_tab(url)
+
+    with tab_health:
+        _render_health_tab(url)
 
 
 if __name__ == "__main__":
