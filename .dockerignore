@@ -4,6 +4,7 @@
 .venv
 assets/
 models/
+data/
 *.md
 *.pyc
 __pycache__/
