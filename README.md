@@ -55,7 +55,7 @@ no camera or GPU and connects to the Pi over the network.
 ### 1. Clone the repository
 
 ```bash
-ssh pi@<your-pi-hostname>
+ssh <your-pi-user>@<your-pi-hostname>
 git clone <repo-url> night-watcher
 cd night-watcher
 ```
@@ -126,7 +126,7 @@ pip install streamlit requests pandas
 streamlit run app.py
 
 # Custom Pi address
-RASPI_URL=http://192.168.1.42:8000 streamlit run app.py
+RASPI_URL=http://<your-pi-ip>:8000 streamlit run app.py
 ```
 
 Open `http://localhost:8501` in your browser.
