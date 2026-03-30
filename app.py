@@ -507,6 +507,21 @@ def _render_health_tab(url: str) -> None:
             st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
             st.caption(f"Raw throttled value: `{p.get('throttled_raw', '?')}`")
 
+        # Time series — record each flag as 0/1
+        hist = st.session_state.setdefault("_hist_power", [])
+        hist.append({
+            "Time": datetime.now().strftime("%H:%M:%S"),
+            "Under-voltage": int(bool(p.get("under_voltage_now"))),
+            "Freq capped": int(bool(p.get("freq_capped_now"))),
+            "Throttled": int(bool(p.get("throttled_now"))),
+            "Soft temp limit": int(bool(p.get("soft_temp_limit_now"))),
+        })
+        if len(hist) > 120:
+            hist.pop(0)
+        if len(hist) > 1:
+            st.write("**Throttle flags over time** (1 = active)")
+            st.line_chart(pd.DataFrame(hist).set_index("Time"))
+
     @st.fragment(run_every=5)
     def _system_metrics() -> None:
         resp = _get("/health/detailed", url, timeout=4.0)
@@ -562,6 +577,27 @@ def _render_health_tab(url: str) -> None:
 
         st.caption(f"Uptime: {uptime_str}")
 
+        # Time series
+        hist = st.session_state.setdefault("_hist_system", [])
+        hist.append({
+            "Time": datetime.now().strftime("%H:%M:%S"),
+            "CPU %": cpu.get("percent", 0),
+            "Memory %": mem.get("percent", 0),
+            "Disk %": disk.get("percent", 0),
+            "Temperature °C": temp if temp is not None else 0,
+        })
+        if len(hist) > 120:
+            hist.pop(0)
+        if len(hist) > 1:
+            df_hist = pd.DataFrame(hist).set_index("Time")
+            col_ts1, col_ts2 = st.columns(2)
+            with col_ts1:
+                st.write("**CPU & Memory over time (%)**")
+                st.line_chart(df_hist[["CPU %", "Memory %"]])
+            with col_ts2:
+                st.write("**Temperature over time (°C)**")
+                st.line_chart(df_hist[["Temperature °C"]])
+
     @st.fragment(run_every=10)
     def _docker_services() -> None:
         st.subheader("Docker Services")
@@ -614,6 +650,25 @@ def _render_health_tab(url: str) -> None:
                 columns=["Class", "Count"],
             ).set_index("Class")
             st.bar_chart(df)
+
+        # Time series
+        hist = st.session_state.setdefault("_hist_app", [])
+        hist.append({
+            "Time": datetime.now().strftime("%H:%M:%S"),
+            "FPS": m.get("fps_avg", 0),
+            "Frame time (ms)": m.get("avg_processing_ms", 0),
+        })
+        if len(hist) > 120:
+            hist.pop(0)
+        if len(hist) > 1:
+            df_hist = pd.DataFrame(hist).set_index("Time")
+            col_ts1, col_ts2 = st.columns(2)
+            with col_ts1:
+                st.write("**FPS over time**")
+                st.line_chart(df_hist[["FPS"]])
+            with col_ts2:
+                st.write("**Frame processing time over time (ms)**")
+                st.line_chart(df_hist[["Frame time (ms)"]])
 
     @st.fragment(run_every=10)
     def _log_viewer() -> None:
