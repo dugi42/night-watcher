@@ -38,7 +38,7 @@ from pydantic import BaseModel
 
 from src.camera import configure_camera, open_camera, read_frame, release_camera
 from src.detector import AsyncYoloDetector, YoloDetector
-from src.health import get_docker_services, get_power_status, get_system_health
+from src.health import get_docker_services, get_pmic_readings, get_power_status, get_system_health
 from src.log_store import SQLiteLogHandler, query_logs
 from src.recorder import VideoRecorder
 from src.telemetry import AppMetrics, setup_telemetry
@@ -392,6 +392,16 @@ def health_detailed() -> dict[str, Any]:
 def health_docker() -> list[dict[str, str]]:
     """Return the list of Docker containers visible via the Docker socket."""
     return get_docker_services()
+
+
+@app.get("/health/pmic", summary="Raspberry Pi 5 PMIC voltage and current readings")
+def health_pmic() -> dict[str, Any]:
+    """Return live voltage and current from all PMIC ADC channels.
+
+    Requires ``vcgencmd`` and ``/dev/vcio`` inside the container.
+    Key field: ``ext5v_v`` is the USB-C input voltage from your power supply.
+    """
+    return get_pmic_readings()
 
 
 @app.get("/health/power", summary="Raspberry Pi power and throttle status")

@@ -523,6 +523,85 @@ def _render_health_tab(url: str) -> None:
             st.line_chart(pd.DataFrame(hist).set_index("Time"))
 
     @st.fragment(run_every=5)
+    def _pmic_readings() -> None:
+        resp = _get("/health/pmic", url, timeout=4.0)
+        st.subheader("Voltage & Current (PMIC)")
+        st.caption(f"Refreshes every 5 s — last update {datetime.now().strftime('%H:%M:%S')}")
+
+        if resp is None:
+            st.warning("Could not fetch PMIC readings from Pi.")
+            return
+
+        d: dict[str, Any] = resp.json()
+        if d.get("error"):
+            st.warning(f"PMIC unavailable: {d['error']}")
+            return
+
+        ext5v = d.get("ext5v_v")
+        total_w = d.get("total_power_w", 0.0)
+        under_voltage = d.get("under_voltage", False)
+
+        # Find core voltage/current from rails list
+        rails: list[dict[str, Any]] = d.get("rails", [])
+        core = next((r for r in rails if r["name"] == "VDD_CORE"), None)
+        sys3v3 = next((r for r in rails if r["name"] == "3V3_SYS"), None)
+
+        if under_voltage:
+            st.error(f"Input voltage low: {ext5v} V — check USB-C power supply (min 4.75 V)")
+        else:
+            st.success(f"Input voltage OK: {ext5v} V")
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Input (EXT5V)", f"{ext5v} V" if ext5v else "N/A",
+                  help="USB-C supply voltage — should be 4.8–5.2 V")
+        c2.metric("Total Power", f"{total_w:.2f} W",
+                  help="Sum of all PMIC rail power draws")
+        c3.metric("CPU Core", f"{core['voltage_v']} V / {core['current_a']} A" if core else "N/A",
+                  help="VDD_CORE voltage and current")
+        c4.metric("3.3V Rail", f"{sys3v3['voltage_v']} V / {sys3v3['current_a']} A" if sys3v3 else "N/A",
+                  help="3V3_SYS rail for peripherals")
+
+        with st.expander("All PMIC rails"):
+            if rails:
+                st.dataframe(
+                    pd.DataFrame(rails).rename(columns={
+                        "name": "Rail", "voltage_v": "Voltage (V)",
+                        "current_a": "Current (A)", "power_w": "Power (W)",
+                    }),
+                    hide_index=True,
+                    width="stretch",
+                )
+
+        # Time series
+        hist = st.session_state.setdefault("_hist_pmic", [])
+        entry: dict[str, Any] = {"Time": datetime.now().strftime("%H:%M:%S")}
+        if ext5v is not None:
+            entry["Input 5V (V)"] = ext5v
+        entry["Total power (W)"] = total_w
+        if core:
+            entry["Core voltage (V)"] = core["voltage_v"]
+            entry["Core current (A)"] = core["current_a"]
+        hist.append(entry)
+        if len(hist) > 120:
+            hist.pop(0)
+        if len(hist) > 1:
+            df_hist = pd.DataFrame(hist).set_index("Time")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write("**Input voltage over time (V)**")
+                if "Input 5V (V)" in df_hist.columns:
+                    st.line_chart(df_hist[["Input 5V (V)"]])
+                st.write("**Total system power over time (W)**")
+                st.line_chart(df_hist[["Total power (W)"]])
+            with col2:
+                if "Core voltage (V)" in df_hist.columns:
+                    st.write("**CPU core voltage over time (V)**")
+                    st.line_chart(df_hist[["Core voltage (V)"]])
+                if "Core current (A)" in df_hist.columns:
+                    st.write("**CPU core current over time (A)**")
+                    st.line_chart(df_hist[["Core current (A)"]])
+
+    @st.fragment(run_every=5)
     def _system_metrics() -> None:
         resp = _get("/health/detailed", url, timeout=4.0)
         if resp is None:
@@ -727,6 +806,8 @@ def _render_health_tab(url: str) -> None:
         )
 
     _power_status()
+    st.divider()
+    _pmic_readings()
     st.divider()
     _system_metrics()
     st.divider()

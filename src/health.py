@@ -137,6 +137,106 @@ def get_docker_services() -> list[dict[str, str]]:
         ]
 
 
+def get_pmic_readings() -> dict[str, Any]:
+    """Return live voltage and current readings from the Raspberry Pi 5 PMIC.
+
+    Uses ``vcgencmd pmic_read_adc`` which queries all ADC channels on the
+    MXL7704 PMIC.  Returns the most diagnostically useful rails plus a
+    computed total system power estimate.
+
+    Key rails
+    ---------
+    ``ext5v_v``
+        Input voltage from the USB-C power supply.  Healthy range: 4.8–5.2 V.
+        Values below ~4.75 V indicate a weak power supply.
+    ``vdd_core_v`` / ``vdd_core_a``
+        CPU core voltage and current — spikes under YOLO inference load.
+    ``3v3_sys_v``
+        3.3 V system rail used by most peripherals.
+
+    Returns
+    -------
+    dict[str, Any]
+        Keys: ``rails`` (list of dicts with ``name``, ``voltage_v``,
+        ``current_a``), ``total_power_w`` (float), ``ext5v_v`` (float | None),
+        ``under_voltage`` (bool), ``error`` (str | None).
+    """
+    try:
+        result = subprocess.run(
+            ["vcgencmd", "pmic_read_adc"],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        )
+        lines = result.stdout.strip().splitlines()
+        if not lines:
+            return {"error": "vcgencmd pmic_read_adc returned no output", "rails": []}
+
+        voltages: dict[str, float] = {}
+        currents: dict[str, float] = {}
+
+        for line in lines:
+            # Format: "  VDD_CORE_A current(7)=1.93781000A"
+            # or:     "  VDD_CORE_V volt(15)=0.87650700V"
+            line = line.strip()
+            if "=" not in line:
+                continue
+            name_part, val_part = line.split("=", 1)
+            name_part = name_part.strip()
+            val_str = val_part.strip().rstrip("AV").strip()
+            try:
+                val = float(val_str)
+            except ValueError:
+                continue
+            # Split "VDD_CORE_A current(7)" → rail name and type
+            parts = name_part.split()
+            if not parts:
+                continue
+            rail_full = parts[0]  # e.g. "VDD_CORE_A" or "VDD_CORE_V"
+            if rail_full.endswith("_A"):
+                rail = rail_full[:-2]
+                currents[rail] = val
+            elif rail_full.endswith("_V"):
+                rail = rail_full[:-2]
+                voltages[rail] = val
+
+        all_rails = sorted(set(voltages) | set(currents))
+        rails = [
+            {
+                "name": r,
+                "voltage_v": round(voltages.get(r, 0.0), 4),
+                "current_a": round(currents.get(r, 0.0), 4),
+                "power_w": round(voltages.get(r, 0.0) * currents.get(r, 0.0), 4),
+            }
+            for r in all_rails
+        ]
+
+        # Total estimated power from all rails that have both V and I
+        total_power = sum(
+            voltages[r] * currents[r]
+            for r in all_rails
+            if r in voltages and r in currents
+        )
+
+        ext5v = voltages.get("EXT5V")
+        # Under-voltage if input rail is below 4.75 V (Pi 5 spec is 5.0 V ± 5%)
+        under_voltage = ext5v is not None and ext5v < 4.75
+
+        return {
+            "rails": rails,
+            "total_power_w": round(total_power, 3),
+            "ext5v_v": round(ext5v, 4) if ext5v is not None else None,
+            "under_voltage": under_voltage,
+            "error": None,
+        }
+    except FileNotFoundError:
+        return {"error": "vcgencmd not found", "rails": []}
+    except subprocess.TimeoutExpired:
+        return {"error": "vcgencmd timed out", "rails": []}
+    except Exception as exc:
+        return {"error": str(exc), "rails": []}
+
+
 def get_power_status() -> dict[str, Any]:
     """Return Raspberry Pi power and throttle status via ``vcgencmd get_throttled``.
 
