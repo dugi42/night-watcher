@@ -275,9 +275,9 @@ dashboard query recent entries without SSH access to the Pi.
 
 ## Bill of Materials
 
-The hardware below is what this build was tested on. Amazon.de links are provided for convenience — **specialist distributors are usually cheaper and ship faster within Germany/EU** (see alternatives per item).
+The hardware below is what this build was tested on. Amazon.de links are provided for convenience — **specialist distributors are often cheaper and ship faster within Germany/EU** (see alternatives per item).
 
-> Prices are approximate and subject to change. Check distributor sites for current availability.
+> Prices are approximate and subject to change. Verify current availability on each shop's website before ordering.
 
 ---
 
@@ -285,13 +285,15 @@ The hardware below is what this build was tested on. Amazon.de links are provide
 
 The 16 GB variant gives comfortable headroom for YOLO inference, Docker, Prometheus, and the OTel Collector running simultaneously.
 
+The Raspberry Pi Foundation enforces MSRP — prices are nearly identical everywhere. Buy from whoever has stock and lowest shipping to you.
+
 | | |
 | --- | --- |
 | **Amazon.de** | [Raspberry Pi 5 — 16 GB](https://www.amazon.de/Raspberry-Pi-5-16-GB/dp/B0DSPYPKRG) |
-| **Berrybase** (DE, ships next day) | [berrybase.de](https://www.berrybase.de) — search "Raspberry Pi 5 16GB" |
-| **Reichelt** (DE, ships next day) | [reichelt.de](https://www.reichelt.de) — search "RPI5 16GB" |
-| **Botland** (DE/EU, often cheapest) | [botland.de](https://botland.de) — search "Raspberry Pi 5 16GB" |
-| **Approx. price** | ~€ 115 – 130 |
+| **Berrybase** (DE, official reseller, ships next day) | [berrybase.de/raspberry-pi-5-16gb](https://www.berrybase.de) |
+| **Reichelt** (DE, ships next day) | [reichelt.de](https://www.reichelt.de) — search "RPI5-16GB" |
+| **Botland** (PL/EU, ships to DE) | [botland.de](https://botland.de) — search "Raspberry Pi 5 16GB" |
+| **Approx. price** | ~€ 139 – 149 |
 
 ---
 
@@ -299,39 +301,43 @@ The 16 GB variant gives comfortable headroom for YOLO inference, Docker, Prometh
 
 Aluminium enclosure with integrated M.2 NVMe HAT and PoE support for Pi 5. Passive cooling built in.
 
+Alternatives are often sold as separate HATs + case — mixing an **official Raspberry Pi M.2 HAT+** (~€15) with a separate PoE HAT gives the best compatibility at the lowest cost.
+
 | | |
 | --- | --- |
 | **Amazon.de** | [GeeekPi Pi 5 Alu Case + NVMe HAT + PoE](https://www.amazon.de/GeeekPi-Raspberry-offiziellem-Aluminiumgehäuse-unterstützt-Schwarz/dp/B0DMW98LBR) |
-| **Berrybase** (alternative) | Argon NEO 5 BRED or Waveshare M.2 HAT+ at [berrybase.de](https://www.berrybase.de) |
-| **Reichelt** (alternative) | Official Raspberry Pi M.2 HAT+ at [reichelt.de](https://www.reichelt.de) |
+| **Berrybase** — Argon ONE V3 M.2 case | [berrybase.de](https://www.berrybase.de) — includes M.2 slot, add separate PoE HAT (~€35–45) |
+| **Berrybase / Reichelt** — Official RPi M.2 HAT+ | Official HAT, most compatible; add separate PoE HAT (~€15 + PoE HAT) |
+| **Waveshare combo** (via Berrybase or AliExpress EU) | Combined NVMe + PoE HAT for Pi 5 (~€25–40) |
 | **Approx. price** | ~€ 35 – 60 depending on variant |
 
 ---
 
 ### 💾 NVMe SSD — 256 GB (M.2 2230 / 2242)
 
-Use an M.2 **2230** or **2242** form factor — full-size 2280 drives may not fit the HAT. The Pi 5 boots and runs the entire OS + Docker storage from NVMe.
+Use an M.2 **2230** or **2242** form factor — full-size 2280 drives do not fit most Pi HATs. Recommended drives: **Samsung PM991a 256 GB** (2230) or **WD SN740 256 GB** (2230) — both well-tested with Pi 5 HATs.
 
 | | |
 | --- | --- |
 | **Amazon.de** | [256 GB NVMe SSD M.2](https://www.amazon.de/dp/B0CP9BZLZ5) |
-| **Alternate.de** (DE, fast shipping) | [alternate.de](https://www.alternate.de) — search "M.2 2230 NVMe 256GB" |
-| **Cyberport** (DE) | [cyberport.de](https://www.cyberport.de) — search "NVMe 2230 256GB" |
-| **MediaMarkt / Saturn** | In-store pickup same day if stocked |
-| **Approx. price** | ~€ 30 – 55 |
+| **Berrybase** (DE) | WD SN740 or compatible 2230/2242 SSD — [berrybase.de](https://www.berrybase.de) (~€30–45) |
+| **Reichelt** (DE) | Kingston NVMe 256 GB — [reichelt.de](https://www.reichelt.de) (~€25–35) |
+| **Alternate.de / Mindfactory.de** | Samsung PM991a 256 GB M.2 2230 (OEM, often cheapest) (~€25–35) |
+| **Approx. price** | ~€ 25 – 45 |
 
 ---
 
 ### ⚡ Power Supply — 5 V / 5 A USB-C (27 W)
 
-> **Critical:** The Pi 5 with an NVMe HAT under YOLO inference load draws up to ~15–18 W peak. A standard 3 A (15 W) USB-C supply **will cause random hard crashes** — undervoltage events reset the CPU before any software can log them. Use a **minimum 5 A / 27 W** USB-C PD supply.
+> **Critical — do not skip this:** The Pi 5 with an NVMe HAT under YOLO inference load draws up to ~15–18 W peak. A standard 3 A (15 W) USB-C supply **will cause random hard crashes** — undervoltage events reset the CPU before any software can log them. The official **Raspberry Pi 27W USB-C PSU** (~€12–14) is the safest and cheapest option.
 
 | | |
 | --- | --- |
-| **Amazon.de** | [5V / 5A USB-C Power Supply](https://www.amazon.de/dp/B0CQYVZYR6) |
-| **Official RPi PSU** at Berrybase | "Raspberry Pi 27W USB-C Power Supply" at [berrybase.de](https://www.berrybase.de) — official, recommended |
-| **Official RPi PSU** at Reichelt | Same official PSU at [reichelt.de](https://www.reichelt.de) — search "RPI PS 15W" or "RPI 27W" |
-| **Approx. price** | ~€ 12 – 18 |
+| **Amazon.de** | [5 V / 5 A USB-C Power Supply](https://www.amazon.de/dp/B0CQYVZYR6) |
+| **Official RPi 27W PSU** at Berrybase | [berrybase.de](https://www.berrybase.de) — search "Raspberry Pi 27W USB-C Netzteil" (~€12–14) |
+| **Official RPi 27W PSU** at Reichelt | [reichelt.de](https://www.reichelt.de) — search "RPI 27W" or "RPI PS USB-C" (~€12–15) |
+| **Conrad** (DE, also in-store) | [conrad.de](https://www.conrad.de) — search "Raspberry Pi Netzteil USB-C 5A" (~€13–16) |
+| **Approx. price** | ~€ 12 – 16 |
 
 ---
 
@@ -339,27 +345,30 @@ Use an M.2 **2230** or **2242** form factor — full-size 2280 drives may not fi
 
 USB camera with IR night vision for outdoor use. Positioned to view the garden — connected directly to the Pi via USB.
 
+Alternative: the **Raspberry Pi Camera Module 3 NoIR** (~€30 at Berrybase) + a cheap IR illuminator (~€8–15 on Amazon) gives better image quality and is purpose-built for the Pi.
+
 | | |
 | --- | --- |
 | **Amazon.de** | [Night Vision Outdoor Webcam](https://www.amazon.de/dp/B0194ZILNY) |
-| **Conrad** (DE, also in-store) | [conrad.de](https://www.conrad.de) — search "USB Webcam Nachtsicht" |
-| **Amazon.de alternatives** | Search "USB outdoor webcam night vision IP66" for weatherproof variants |
+| **ELP direct / AliExpress EU warehouse** | Same or similar ELP USB IR cameras, often cheaper than Amazon resellers (~€25–50) |
+| **Berrybase** — RPi Camera Module 3 NoIR + IR illuminator | [berrybase.de](https://www.berrybase.de) — best image quality option for Pi (~€35–50 total) |
+| **Botland.de** — ArduCam USB IR cameras | [botland.de](https://botland.de) — USB cameras with IR, ships to DE (~€20–45) |
 | **Approx. price** | ~€ 25 – 60 depending on resolution and IR range |
 
 ---
 
 ### 💰 Approximate Total
 
-| Component | Price |
+| Component | Approx. price |
 | --- | --- |
-| Raspberry Pi 5 16 GB | ~€ 120 |
+| Raspberry Pi 5 16 GB | ~€ 145 |
 | Case + NVMe HAT + PoE | ~€ 45 |
-| NVMe SSD 256 GB | ~€ 40 |
-| 5 V / 5 A Power Supply | ~€ 15 |
+| NVMe SSD 256 GB (Samsung PM991a / WD SN740) | ~€ 30 |
+| 5 V / 5 A Power Supply (official RPi 27W PSU) | ~€ 13 |
 | Night Vision Webcam | ~€ 35 |
-| **Total** | **~€ 255** |
+| **Total** | **~€ 268** |
 
-> Buying through Berrybase, Reichelt, or Botland instead of Amazon typically saves €10–30 on the Pi and accessories, and often ships the next business day within Germany.
+> Buying through Berrybase, Reichelt, or Botland instead of Amazon typically saves €10–20 overall and ships the next business day within Germany.
 
 ---
 
