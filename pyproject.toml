@@ -1,6 +1,6 @@
 [project]
 name = "night-watcher"
-version = "0.2.0"
+version = "1.0.0"
 description = "Raspberry Pi wildlife camera with YOLO detection and Streamlit dashboard"
 readme = "README.md"
 requires-python = ">=3.12"

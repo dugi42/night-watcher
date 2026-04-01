@@ -52,7 +52,7 @@ def setup_telemetry() -> AppMetrics:
         no-ops when the exporter is unavailable.
     """
     resource = Resource.create(
-        {"service.name": _SERVICE_NAME, "service.version": "0.2.0"}
+        {"service.name": _SERVICE_NAME, "service.version": "1.0.0"}
     )
 
     # --- Metrics provider ---

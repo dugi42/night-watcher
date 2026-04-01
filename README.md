@@ -8,6 +8,19 @@ in a web dashboard.
 
 ---
 
+## Stable Release 1.0.0
+
+Night Watcher `1.0.0` is the first stable release of the project. The current
+system delivers a complete Raspberry Pi wildlife monitoring stack with:
+
+- Real-time YOLO11n detection for people and animals.
+- Session-based annotated video recording with persistent metadata storage.
+- A Streamlit dashboard for live video, detections, logs, and system health.
+- OpenTelemetry and Prometheus observability for runtime, thermal, and power metrics.
+- Docker Compose deployment for repeatable operation on the Raspberry Pi.
+
+---
+
 ## Architecture
 
 ```text
@@ -439,6 +452,14 @@ Alternative: the **Raspberry Pi Camera Module 3 NoIR** (~€30 at Berrybase) + a
 Night Watcher reports **people** and **animals** from the COCO dataset:
 
 `person` · `bird` · `cat` · `dog` · `horse` · `sheep` · `cow` · `elephant` · `bear` · `zebra` · `giraffe`
+
+---
+
+## Roadmap
+
+- Add two DHT22 sensors on the Raspberry Pi GPIO header to measure ambient temperature and humidity as well as enclosure temperature and humidity, enabling condensation alerts and a controlled Raspberry Pi shutdown when enclosure conditions become unsafe.
+- Add VPN access for secure remote administration and dashboard access.
+- Add photo documentation of the mechanical setup.
 
 ---
 
