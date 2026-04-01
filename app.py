@@ -790,6 +790,20 @@ def _render_health_tab(url: str, prom_url: str) -> None:
 
         st.caption(f"Uptime: {uptime_str}")
 
+        # Always keep a rolling in-memory history so charts that lack
+        # Prometheus data (e.g. temperature before the metric lands in Prom)
+        # can still display something meaningful.
+        hist = st.session_state.setdefault("_hist_system", [])
+        hist.append({
+            "Time": datetime.now().strftime("%H:%M:%S"),
+            "CPU %": cpu.get("percent", 0),
+            "Memory %": mem.get("percent", 0),
+            "Disk %": disk.get("percent", 0),
+            "Temperature °C": temp if temp is not None else 0,
+        })
+        if len(hist) > 120:
+            hist.pop(0)
+
         # Time series — Prometheus first, in-memory fallback
         col_ts1, col_ts2 = st.columns(2)
         with col_ts1:
@@ -800,16 +814,6 @@ def _render_health_tab(url: str, prom_url: str) -> None:
                 frames = [f for f in (df_cpu, df_mem) if f is not None]
                 st.line_chart(pd.concat(frames, axis=1))
             else:
-                hist = st.session_state.setdefault("_hist_system", [])
-                hist.append({
-                    "Time": datetime.now().strftime("%H:%M:%S"),
-                    "CPU %": cpu.get("percent", 0),
-                    "Memory %": mem.get("percent", 0),
-                    "Disk %": disk.get("percent", 0),
-                    "Temperature °C": temp if temp is not None else 0,
-                })
-                if len(hist) > 120:
-                    hist.pop(0)
                 if len(hist) > 1:
                     df_h = pd.DataFrame(hist).set_index("Time")
                     st.line_chart(df_h[["CPU %", "Memory %"]])
