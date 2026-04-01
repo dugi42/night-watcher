@@ -273,6 +273,96 @@ dashboard query recent entries without SSH access to the Pi.
 
 ---
 
+## Bill of Materials
+
+The hardware below is what this build was tested on. Amazon.de links are provided for convenience — **specialist distributors are usually cheaper and ship faster within Germany/EU** (see alternatives per item).
+
+> Prices are approximate and subject to change. Check distributor sites for current availability.
+
+---
+
+### 🖥️ Raspberry Pi 5 — 16 GB
+
+The 16 GB variant gives comfortable headroom for YOLO inference, Docker, Prometheus, and the OTel Collector running simultaneously.
+
+| | |
+| --- | --- |
+| **Amazon.de** | [Raspberry Pi 5 — 16 GB](https://www.amazon.de/Raspberry-Pi-5-16-GB/dp/B0DSPYPKRG) |
+| **Berrybase** (DE, ships next day) | [berrybase.de](https://www.berrybase.de) — search "Raspberry Pi 5 16GB" |
+| **Reichelt** (DE, ships next day) | [reichelt.de](https://www.reichelt.de) — search "RPI5 16GB" |
+| **Botland** (DE/EU, often cheapest) | [botland.de](https://botland.de) — search "Raspberry Pi 5 16GB" |
+| **Approx. price** | ~€ 115 – 130 |
+
+---
+
+### 🏠 Case with NVMe SSD HAT + PoE — GeeekPi
+
+Aluminium enclosure with integrated M.2 NVMe HAT and PoE support for Pi 5. Passive cooling built in.
+
+| | |
+| --- | --- |
+| **Amazon.de** | [GeeekPi Pi 5 Alu Case + NVMe HAT + PoE](https://www.amazon.de/GeeekPi-Raspberry-offiziellem-Aluminiumgehäuse-unterstützt-Schwarz/dp/B0DMW98LBR) |
+| **Berrybase** (alternative) | Argon NEO 5 BRED or Waveshare M.2 HAT+ at [berrybase.de](https://www.berrybase.de) |
+| **Reichelt** (alternative) | Official Raspberry Pi M.2 HAT+ at [reichelt.de](https://www.reichelt.de) |
+| **Approx. price** | ~€ 35 – 60 depending on variant |
+
+---
+
+### 💾 NVMe SSD — 256 GB (M.2 2230 / 2242)
+
+Use an M.2 **2230** or **2242** form factor — full-size 2280 drives may not fit the HAT. The Pi 5 boots and runs the entire OS + Docker storage from NVMe.
+
+| | |
+| --- | --- |
+| **Amazon.de** | [256 GB NVMe SSD M.2](https://www.amazon.de/dp/B0CP9BZLZ5) |
+| **Alternate.de** (DE, fast shipping) | [alternate.de](https://www.alternate.de) — search "M.2 2230 NVMe 256GB" |
+| **Cyberport** (DE) | [cyberport.de](https://www.cyberport.de) — search "NVMe 2230 256GB" |
+| **MediaMarkt / Saturn** | In-store pickup same day if stocked |
+| **Approx. price** | ~€ 30 – 55 |
+
+---
+
+### ⚡ Power Supply — 5 V / 5 A USB-C (27 W)
+
+> **Critical:** The Pi 5 with an NVMe HAT under YOLO inference load draws up to ~15–18 W peak. A standard 3 A (15 W) USB-C supply **will cause random hard crashes** — undervoltage events reset the CPU before any software can log them. Use a **minimum 5 A / 27 W** USB-C PD supply.
+
+| | |
+| --- | --- |
+| **Amazon.de** | [5V / 5A USB-C Power Supply](https://www.amazon.de/dp/B0CQYVZYR6) |
+| **Official RPi PSU** at Berrybase | "Raspberry Pi 27W USB-C Power Supply" at [berrybase.de](https://www.berrybase.de) — official, recommended |
+| **Official RPi PSU** at Reichelt | Same official PSU at [reichelt.de](https://www.reichelt.de) — search "RPI PS 15W" or "RPI 27W" |
+| **Approx. price** | ~€ 12 – 18 |
+
+---
+
+### 📷 Night Vision Outdoor Webcam (USB)
+
+USB camera with IR night vision for outdoor use. Positioned to view the garden — connected directly to the Pi via USB.
+
+| | |
+| --- | --- |
+| **Amazon.de** | [Night Vision Outdoor Webcam](https://www.amazon.de/dp/B0194ZILNY) |
+| **Conrad** (DE, also in-store) | [conrad.de](https://www.conrad.de) — search "USB Webcam Nachtsicht" |
+| **Amazon.de alternatives** | Search "USB outdoor webcam night vision IP66" for weatherproof variants |
+| **Approx. price** | ~€ 25 – 60 depending on resolution and IR range |
+
+---
+
+### 💰 Approximate Total
+
+| Component | Price |
+| --- | --- |
+| Raspberry Pi 5 16 GB | ~€ 120 |
+| Case + NVMe HAT + PoE | ~€ 45 |
+| NVMe SSD 256 GB | ~€ 40 |
+| 5 V / 5 A Power Supply | ~€ 15 |
+| Night Vision Webcam | ~€ 35 |
+| **Total** | **~€ 255** |
+
+> Buying through Berrybase, Reichelt, or Botland instead of Amazon typically saves €10–30 on the Pi and accessories, and often ships the next business day within Germany.
+
+---
+
 ## Detected Classes
 
 Night Watcher reports **people** and **animals** from the COCO dataset:
