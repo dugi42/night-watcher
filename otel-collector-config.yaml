@@ -32,6 +32,10 @@ exporters:
     namespace: night_watcher
     send_timestamps: true
     enable_open_metrics: true
+    # Prevent the exporter from appending unit suffixes (e.g. _celsius, _volts,
+    # _watts) to metric names — the units are already encoded in the names
+    # themselves (temperature_c, ext5v_v, total_power_w, rail_current_a).
+    add_metric_suffixes: false
 
   # Print traces and logs to stdout (visible via `docker compose logs`)
   debug:

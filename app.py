@@ -354,37 +354,41 @@ def _render_stream_tab(url: str) -> None:
         scrolling=False,
     )
 
-    resp = _get("/status", url)
-    if resp is not None:
-        status: dict[str, Any] = resp.json()
-        classes: str = ", ".join(status.get("detected_classes", [])) or "none"
-        sid: str = status.get("session_id") or ""
-        detection_active: bool = status.get("detection_active", True)
-        frame_age_ms: int | None = status.get("frame_age_ms")
-        captured_at: float | None = status.get("frame_captured_at")
+    @st.fragment(run_every=3)
+    def _stream_status() -> None:
+        resp = _get("/status", url)
+        if resp is not None:
+            status: dict[str, Any] = resp.json()
+            classes: str = ", ".join(status.get("detected_classes", [])) or "none"
+            sid: str = status.get("session_id") or ""
+            detection_active: bool = status.get("detection_active", True)
+            frame_age_ms: int | None = status.get("frame_age_ms")
+            captured_at: float | None = status.get("frame_captured_at")
 
-        logger.debug(
-            "Status: detection_active=%s classes=%s session=%s",
-            detection_active, classes, sid,
-        )
+            logger.debug(
+                "Status: detection_active=%s classes=%s session=%s",
+                detection_active, classes, sid,
+            )
 
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Detection", "Active" if detection_active else "Paused")
-        col2.metric("Detected", classes)
-        col3.metric("Session", sid[:8] + "…" if sid else "—")
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Detection", "Active" if detection_active else "Paused")
+            col2.metric("Detected", classes)
+            col3.metric("Session", sid[:8] + "…" if sid else "—")
 
-        if captured_at and frame_age_ms is not None:
-            frame_ts = datetime.fromtimestamp(captured_at).strftime("%H:%M:%S")
-            col4.metric("Last Frame", frame_ts, delta=f"{frame_age_ms} ms ago", delta_color="off")
+            if captured_at and frame_age_ms is not None:
+                frame_ts = datetime.fromtimestamp(captured_at).strftime("%H:%M:%S")
+                col4.metric("Last Frame", frame_ts, delta=f"{frame_age_ms} ms ago", delta_color="off")
+            else:
+                col4.metric("Last Frame", "—")
+
+            st.caption(f"Status — HTTP {resp.status_code}")
+            if not detection_active:
+                st.info("Detection is currently paused. Enable it in the sidebar.")
         else:
-            col4.metric("Last Frame", "—")
+            st.warning("Could not fetch status from Pi.")
+            logger.warning("GET /status failed for %s", url)
 
-        st.caption(f"Status — HTTP {resp.status_code}")
-        if not detection_active:
-            st.info("Detection is currently paused. Enable it in the sidebar.")
-    else:
-        st.warning("Could not fetch status from Pi.")
-        logger.warning("GET /status failed for %s", url)
+    _stream_status()
 
 
 def _render_stats_tab(url: str) -> None:

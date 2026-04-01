@@ -19,6 +19,10 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # vcgencmd binary from the host so /health/power can query throttle status
       - /usr/bin/vcgencmd:/usr/bin/vcgencmd:ro
+      # Sync container timezone with the host so timestamps in the camera
+      # overlay and logs reflect local time rather than UTC
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     environment:
       - PYTHONUNBUFFERED=1
       - CAMERA_DEVICE=/dev/video0
