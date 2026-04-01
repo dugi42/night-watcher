@@ -17,8 +17,8 @@ in a web dashboard.
 │  ┌─────────────────────────────────────┐   │  :8000 │  streamlit run app.py        │
 │  │  night-watcher                      │   │        │                              │
 │  │  Camera → YOLO11n → Tracker         │   │        │  📷 Live MJPEG stream        │
-│  │               ↓           ↓         │   │        │  📊 Detection statistics      │
-│  │          /assets/video   JSON       │   │        │  🩺 Health monitoring         │
+│  │               ↓           ↓         │   │        │  📊 Detection statistics     │
+│  │          /assets/video   JSON       │   │        │  🩺 Health monitoring        │
 │  │          recordings      history    │   │        └──────────────────────────────┘
 │  │  FastAPI :8000                      │   │
 │  └────────────┬────────────────────────┘   │
@@ -42,7 +42,7 @@ The **Pi service** (`src/service.py`) runs inside Docker:
 - Records an annotated MP4 video for each session.
 - Appends session metadata to `/assets/meta/detections.json`.
 - Writes structured logs to `/assets/logs/app.db` (SQLite).
-- Ships metrics and traces to the **OpenTelemetry Collector** via OTLP HTTP.
+- Ships detection metrics, system health, and PMIC readings to the **OpenTelemetry Collector** via OTLP HTTP.
 - Exposes an HTTP API on port **8000**.
 
 The **Streamlit client** (`app.py`) runs on your local machine. It requires
@@ -71,8 +71,8 @@ This starts three services:
 | Service | Port(s) | Purpose |
 | --- | --- | --- |
 | `night-watcher` | `8000` | Camera, YOLO detection, HTTP API |
-| `otel-collector` | `4317` (gRPC), `4318` (HTTP), `9464` (Prometheus) | Receives OTLP, exposes metrics |
-| `prometheus` | `9090` | Scrapes and stores time-series metrics |
+| `otel-collector` | `4317` (gRPC), `4318` (HTTP), `9464` (Prometheus scrape) | Receives OTLP, exposes metrics |
+| `prometheus` | `9090` | Scrapes and stores time-series metrics (30-day retention) |
 
 On first build the YOLO11n weights are downloaded and baked into the image.
 
@@ -122,11 +122,14 @@ pip install streamlit requests pandas
 ### Run the dashboard
 
 ```bash
-# Default — connects to the URL set in DEFAULT_URL (app.py) or RASPI_URL env var
+# Default — connects to raspberrypi.local:8000 (override via RASPI_URL)
 streamlit run app.py
 
 # Custom Pi address
 RASPI_URL=http://<your-pi-ip>:8000 streamlit run app.py
+
+# Custom Prometheus address (for historical charts in the Health tab)
+PROMETHEUS_URL=http://<your-pi-ip>:9090 streamlit run app.py
 ```
 
 Open `http://localhost:8501` in your browser.
@@ -151,14 +154,26 @@ Open `http://localhost:8501` in your browser.
 
 ### 🩺 Health
 
-Auto-refreshes every 5–10 seconds using Streamlit fragments.
+Auto-refreshes every 5–10 seconds using Streamlit fragments. Time-series
+charts query Prometheus for historical data (configurable window: 15 min to
+7 days); falls back to an in-memory rolling window when Prometheus is
+unreachable.
 
 | Section | Data source | Refresh |
 | --- | --- | --- |
+| Power & Throttle Status | `/health/power` | 10 s |
+| Voltage & Current (PMIC) | `/health/pmic` | 5 s |
 | System Health | `/health/detailed` | 5 s |
 | Docker Services | `/health/docker` | 10 s |
 | Application Metrics | `/metrics/app` | 5 s |
 | Application Logs | `/logs` | 10 s |
+
+**Power & Throttle Status** shows current and historical throttling flags
+(under-voltage, frequency-capping, thermal soft limit) read via `vcgencmd`.
+
+**Voltage & Current (PMIC)** shows live USB-C input voltage, total system
+power, and CPU core voltage / current from the MXL7704 PMIC ADC channels,
+plus a per-rail breakdown table and historical trend charts.
 
 **System Health** shows CPU %, memory, disk usage (progress bars), CPU
 temperature with a colour indicator (🟢 < 60 °C · 🟡 < 75 °C · 🔴 ≥ 75 °C),
@@ -214,7 +229,9 @@ The app uses the **OpenTelemetry SDK** (`opentelemetry-sdk`) to emit:
 
 | Signal | Instruments |
 | --- | --- |
-| Metrics | `night_watcher.frames.processed` (counter), `night_watcher.frames.processing_ms` (histogram), `night_watcher.detections.total` (counter, labelled by class), `night_watcher.sessions.started` (counter) |
+| **Detection metrics** | `night_watcher.frames.processed` (counter), `night_watcher.frames.processing_ms` (histogram), `night_watcher.detections.total` (counter by class), `night_watcher.sessions.started` (counter) |
+| **System health** | `system.cpu.percent`, `system.memory.percent`, `system.disk.percent`, `system.temperature_c`, `system.cpu.frequency_mhz` (observable gauges, polled every 15 s) |
+| **PMIC power** | `pmic.ext5v_v`, `pmic.total_power_w`, `pmic.rail.voltage_v{rail}`, `pmic.rail.current_a{rail}` (observable gauges, polled every 15 s) |
 | Traces | Span exporter to OTel Collector (for future instrumentation) |
 
 Metrics are exported every 15 s via **OTLP HTTP** to the `otel-collector`
@@ -225,20 +242,44 @@ to a no-op provider — the application keeps running.
 
 ### Prometheus
 
-Prometheus scrapes the OTel Collector every 15 s and retains data for 30
-days.  Access the UI at `http://<your-pi-hostname>:9090`.
+Prometheus scrapes the OTel Collector every 15 s and retains data for **30
+days**.  Access the UI at `http://<your-pi-hostname>:9090`.
+
+Metric names in Prometheus (the otel-collector config adds the `night_watcher` namespace):
+
+```promql
+# System health
+night_watcher_system_cpu_percent
+night_watcher_system_memory_percent
+night_watcher_system_disk_percent
+night_watcher_system_temperature_c
+night_watcher_system_cpu_frequency_mhz
+
+# PMIC power rails
+night_watcher_pmic_ext5v_v
+night_watcher_pmic_total_power_w
+night_watcher_pmic_rail_voltage_v{rail="VDD_CORE"}
+night_watcher_pmic_rail_current_a{rail="VDD_CORE"}
+
+# Detection pipeline
+night_watcher_night_watcher_frames_processed_total
+night_watcher_night_watcher_detections_total
+```
 
 Example queries:
 
 ```promql
-# Current average FPS
-rate(night_watcher_frames_processed_total[1m])
+# CPU temperature over the last hour
+night_watcher_system_temperature_c
 
-# Frame processing latency p95
-histogram_quantile(0.95, rate(night_watcher_frames_processing_ms_bucket[5m]))
+# Input voltage — detect brown-outs
+min_over_time(night_watcher_pmic_ext5v_v[1h])
 
-# Detections by class
-night_watcher_detections_total
+# CPU core current P95 over the last 5 minutes
+histogram_quantile(0.95, rate(night_watcher_pmic_rail_current_a_bucket{rail="VDD_CORE"}[5m]))
+
+# Total system power
+night_watcher_pmic_total_power_w
 ```
 
 ### Structured Logs (SQLite)
@@ -246,6 +287,26 @@ night_watcher_detections_total
 All `night_watcher.*` logger output is captured by `SQLiteLogHandler` and
 written to `/assets/logs/app.db`.  The `/logs` endpoint lets the Streamlit
 dashboard query recent entries without SSH access to the Pi.
+
+---
+
+## Long-term Health Analysis
+
+After collecting data for a few days, run the analysis script on your laptop
+to generate a health report:
+
+```bash
+python scripts/analyze_health.py \
+    --prometheus http://<your-pi-hostname>:9090 \
+    --days 7
+
+# Preview without modifying README
+python scripts/analyze_health.py --no-write
+```
+
+The script queries Prometheus, computes statistics (min / avg / max / P95),
+detects notable events (under-voltage, high temperature, CPU / RAM spikes),
+and injects the results into the **Long-term Health Report** section below.
 
 ---
 
@@ -259,7 +320,8 @@ dashboard query recent entries without SSH access to the Pi.
 | `YOLO_MODEL_PATH` | `/app/models/yolo11n.pt` | YOLO model weights path |
 | `ASSETS_DIR` | `/assets` | Root for video, metadata, and logs |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://otel-collector:4318` | OTel Collector HTTP endpoint |
-| `RASPI_URL` | `http://<your-pi-hostname>:8000` | Pi service URL (client-side only) |
+| `RASPI_URL` | `http://raspberrypi.local:8000` | Pi service URL (client-side only) |
+| `PROMETHEUS_URL` | `http://raspberrypi.local:9090` | Prometheus URL (client-side only) |
 
 ### Detection config (live, via dashboard or API)
 
@@ -329,13 +391,13 @@ Use an M.2 **2230** or **2242** form factor — full-size 2280 drives do not fit
 
 ### ⚡ Power Supply — 5 V / 5 A USB-C (27 W)
 
-> **Critical — do not skip this:** The Pi 5 with an NVMe HAT under YOLO inference load draws up to ~15–18 W peak. A standard 3 A (15 W) USB-C supply **will cause random hard crashes** — undervoltage events reset the CPU before any software can log them. The official **Raspberry Pi 27W USB-C PSU** (~€12–14) is the safest and cheapest option.
+> **Critical — do not skip this:** The Pi 5 with an NVMe HAT under YOLO inference load draws up to ~15–18 W peak. A standard 3 A (15 W) USB-C supply **will cause random hard crashes** — undervoltage events reset the CPU before any software can log them. The official **Raspberry Pi 27 W USB-C PSU** (~€12–14) is the safest and cheapest option.
 
 | | |
 | --- | --- |
 | **Amazon.de** | [5 V / 5 A USB-C Power Supply](https://www.amazon.de/dp/B0CQYVZYR6) |
-| **Official RPi 27W PSU** at Berrybase | [berrybase.de](https://www.berrybase.de) — search "Raspberry Pi 27W USB-C Netzteil" (~€12–14) |
-| **Official RPi 27W PSU** at Reichelt | [reichelt.de](https://www.reichelt.de) — search "RPI 27W" or "RPI PS USB-C" (~€12–15) |
+| **Official RPi 27 W PSU** at Berrybase | [berrybase.de](https://www.berrybase.de) — search "Raspberry Pi 27W USB-C Netzteil" (~€12–14) |
+| **Official RPi 27 W PSU** at Reichelt | [reichelt.de](https://www.reichelt.de) — search "RPI 27W" or "RPI PS USB-C" (~€12–15) |
 | **Conrad** (DE, also in-store) | [conrad.de](https://www.conrad.de) — search "Raspberry Pi Netzteil USB-C 5A" (~€13–16) |
 | **Approx. price** | ~€ 12 – 16 |
 
@@ -364,7 +426,7 @@ Alternative: the **Raspberry Pi Camera Module 3 NoIR** (~€30 at Berrybase) + a
 | Raspberry Pi 5 16 GB | ~€ 145 |
 | Case + NVMe HAT + PoE | ~€ 45 |
 | NVMe SSD 256 GB (Samsung PM991a / WD SN740) | ~€ 30 |
-| 5 V / 5 A Power Supply (official RPi 27W PSU) | ~€ 13 |
+| 5 V / 5 A Power Supply (official RPi 27 W PSU) | ~€ 13 |
 | Night Vision Webcam | ~€ 35 |
 | **Total** | **~€ 268** |
 
@@ -377,3 +439,11 @@ Alternative: the **Raspberry Pi Camera Module 3 NoIR** (~€30 at Berrybase) + a
 Night Watcher reports **people** and **animals** from the COCO dataset:
 
 `person` · `bird` · `cat` · `dog` · `horse` · `sheep` · `cow` · `elephant` · `bear` · `zebra` · `giraffe`
+
+---
+
+## Long-term Health Report
+
+<!-- HEALTH-REPORT-START -->
+*No report generated yet. Run `python scripts/analyze_health.py` after collecting a few days of data.*
+<!-- HEALTH-REPORT-END -->
