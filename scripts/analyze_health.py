@@ -12,23 +12,23 @@ If the markers are absent the section is appended at the end of the file.
 
 Requirements
 ------------
-The ``requests`` package must be installed (already a client dependency):
+Dependencies are managed by uv (already covered by ``uv sync``):
 
-    pip install requests          # or: uv sync --group client
+    uv sync
 
 Usage
 -----
     # Default: query http://raspberrypi.local:9090, last 7 days, write README.md
-    python scripts/analyze_health.py
+    uv run scripts/analyze_health.py
 
     # Custom Prometheus and window
-    python scripts/analyze_health.py --prometheus http://192.168.1.50:9090 --days 3
+    uv run scripts/analyze_health.py --prometheus http://192.168.1.50:9090 --days 3
 
     # Print report to stdout only (do not modify README)
-    python scripts/analyze_health.py --no-write
+    uv run scripts/analyze_health.py --no-write
 
     # Write to a different file
-    python scripts/analyze_health.py --output /tmp/report.md
+    uv run scripts/analyze_health.py --output /tmp/report.md
 """
 from __future__ import annotations
 
@@ -42,11 +42,7 @@ from pathlib import Path
 try:
     import requests
 except ImportError:
-    sys.exit(
-        "Error: 'requests' is required.\n"
-        "Install it with:  pip install requests\n"
-        "                  uv sync --group client"
-    )
+    sys.exit("Error: 'requests' is required. Run:  uv sync")
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -112,6 +108,43 @@ def query_range(
         return []
 
 
+# Unit suffixes the OTel Collector prometheus exporter may append when
+# add_metric_suffixes is true (the default in recent collector versions).
+_UNIT_SUFFIXES = ("_celsius", "_volts", "_watts", "_amperes", "_ratio")
+
+
+def query_range_with_fallback(
+    prom_url: str,
+    query: str,
+    start: int,
+    end: int,
+    step: int = 60,
+) -> list[float]:
+    """Like :func:`query_range` but retries with unit-suffix variants on empty result.
+
+    The OTel Collector prometheus exporter historically appended unit suffixes
+    (``_celsius``, ``_volts``, ``_watts``, ``_amperes``) to metric names by
+    default.  This function tries the canonical name first, then the suffixed
+    variants, so the script works regardless of the collector configuration.
+    """
+    values = query_range(prom_url, query, start, end, step)
+    if values:
+        return values
+    # Split off any label selector (e.g. 'metric_name{label="val"}')
+    if "{" in query:
+        base, labels_part = query.split("{", 1)
+        labels_part = "{" + labels_part
+    else:
+        base, labels_part = query, ""
+    for suffix in _UNIT_SUFFIXES:
+        fallback = f"{base}{suffix}{labels_part}"
+        v = query_range(prom_url, fallback, start, end, step)
+        if v:
+            print(f"  Note: metric resolved via suffix variant {fallback!r}", file=sys.stderr)
+            return v
+    return []
+
+
 # ---------------------------------------------------------------------------
 # Statistics helpers
 # ---------------------------------------------------------------------------
@@ -169,7 +202,7 @@ def generate_report(prom_url: str, days: float) -> str:
     all_stats: dict[str, dict] = {}
     for key, (query, label, _unit, _dec) in METRICS.items():
         print(f"  Fetching {label} …")
-        v = query_range(prom_url, query, start, now, step)
+        v = query_range_with_fallback(prom_url, query, start, now, step)
         all_values[key] = v
         all_stats[key] = compute_stats(v)
 
