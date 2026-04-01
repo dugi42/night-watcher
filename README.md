@@ -1,5 +1,18 @@
 # 🦉 Night Watcher — Auge der Nacht
 
+[![Release](https://img.shields.io/github/v/tag/dugi42/night-watcher?label=release&sort=semver)](https://github.com/dugi42/night-watcher/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/dugi42/night-watcher/ci.yml?branch=main&label=CI)](https://github.com/dugi42/night-watcher/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/dugi42/night-watcher/graph/badge.svg)](https://codecov.io/gh/dugi42/night-watcher)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Citation](https://img.shields.io/badge/citation-CFF-blue)](CITATION.cff)
+[![Last Commit](https://img.shields.io/github/last-commit/dugi42/night-watcher)](https://github.com/dugi42/night-watcher/commits/main)
+[![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Streamlit](https://img.shields.io/badge/Streamlit-dashboard-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-API-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Docker Compose](https://img.shields.io/badge/Docker%20Compose-deployment-2496ED?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
+[![Prometheus](https://img.shields.io/badge/Prometheus-metrics-E6522C?logo=prometheus&logoColor=white)](https://prometheus.io/)
+[![Raspberry Pi](https://img.shields.io/badge/Raspberry%20Pi-5-A22846?logo=raspberrypi&logoColor=white)](https://www.raspberrypi.com/products/raspberry-pi-5/)
+
 A Raspberry Pi wildlife camera that uses YOLO object detection to spot animals
 in your garden, record video clips, and present statistics and health metrics
 in a web dashboard.
@@ -18,6 +31,14 @@ system delivers a complete Raspberry Pi wildlife monitoring stack with:
 - A Streamlit dashboard for live video, detections, logs, and system health.
 - OpenTelemetry and Prometheus observability for runtime, thermal, and power metrics.
 - Docker Compose deployment for repeatable operation on the Raspberry Pi.
+
+---
+
+## Quality Status
+
+- GitHub Actions runs unit tests and publishes a coverage report on every push and pull request.
+- Coverage is reported via Codecov once the workflow has executed on GitHub.
+- The CI badge becomes live after the workflow file is pushed and GitHub has completed the first run on `main`.
 
 ---
 
@@ -460,6 +481,17 @@ Night Watcher reports **people** and **animals** from the COCO dataset:
 - Add two DHT22 sensors on the Raspberry Pi GPIO header to measure ambient temperature and humidity as well as enclosure temperature and humidity, enabling condensation alerts and a controlled Raspberry Pi shutdown when enclosure conditions become unsafe.
 - Add VPN access for secure remote administration and dashboard access.
 - Add photo documentation of the mechanical setup.
+
+---
+
+## License
+
+This project is licensed under the MIT License. You may use, modify, and
+redistribute it freely, including commercially, as long as the copyright and
+license notice are retained.
+
+If you reference this project in documentation, research, or derivative work,
+use the citation metadata in [`CITATION.cff`](CITATION.cff).
 
 ---
 

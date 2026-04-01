@@ -12,6 +12,8 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 .pytest_cache/
+.coverage
+coverage.xml
 
 # macOS
 .DS_Store
