@@ -41,7 +41,7 @@ from src.detector import AsyncYoloDetector, YoloDetector
 from src.health import get_docker_services, get_pmic_readings, get_power_status, get_system_health
 from src.log_store import SQLiteLogHandler, query_logs
 from src.recorder import VideoRecorder
-from src.telemetry import AppMetrics, setup_telemetry
+from src.telemetry import AppMetrics, setup_health_telemetry, setup_telemetry
 from src.tracker import DetectionTracker
 from src.utils import setup_logging
 
@@ -362,6 +362,7 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Start telemetry and detection loop on startup; stop on shutdown."""
     global _otel, _loop
     _otel = setup_telemetry()
+    setup_health_telemetry()
     _loop = DetectionLoop(_state, _config, _stats, _otel)
     _loop.start()
     yield
