@@ -351,13 +351,13 @@ provider — the application keeps running.
 
 Grafana runs on port **3000** and is the recommended tool for time-series
 dashboards. Prometheus is automatically configured as the default datasource
-on first start via `grafana/provisioning/datasources/prometheus.yml` — no
+on startup via `grafana/provisioning/datasources/prometheus.yml` — no
 manual setup required.
 
 Access the dashboard at `http://<your-pi-hostname>:3000`.
 Default credentials: `admin` / `nightwatcher`.
-Anonymous read-only access is enabled so the Streamlit dashboard can link
-directly to panels.
+Anonymous editor access is enabled so you can build dashboards immediately and
+the Streamlit dashboard can still link directly to panels.
 
 ### Prometheus
 
