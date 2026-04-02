@@ -4,6 +4,7 @@ import sys
 import types
 
 from src import telemetry
+from src import __version__
 
 
 class _FakeInstrument:
@@ -88,7 +89,7 @@ def test_setup_telemetry_creates_metric_and_trace_providers(monkeypatch) -> None
     assert app_metrics.frame_processing_ms.name == "night_watcher.frames.processing_ms"
     assert app_metrics.detections_total.name == "night_watcher.detections.total"
     assert app_metrics.sessions_started.name == "night_watcher.sessions.started"
-    assert meter_providers[0].resource["service.version"] == "1.0.0"
+    assert meter_providers[0].resource["service.version"] == __version__
     assert meter_providers[0].metric_readers[0].exporter.endpoint.endswith("/v1/metrics")
     assert trace_providers[0].processors[0][1].endpoint.endswith("/v1/traces")
 

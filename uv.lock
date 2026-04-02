@@ -874,7 +874,7 @@ wheels = [
 
 [[package]]
 name = "night-watcher"
-version = "1.0.0"
+version = "1.2.1"
 source = { virtual = "." }
 dependencies = [
     { name = "docker" },
@@ -893,10 +893,6 @@ dependencies = [
 ]
 
 [package.dev-dependencies]
-client = [
-    { name = "requests" },
-    { name = "streamlit" },
-]
 test = [
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -920,10 +916,6 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
-client = [
-    { name = "requests" },
-    { name = "streamlit" },
-]
 test = [
     { name = "pytest", specifier = ">=8.3.0" },
     { name = "pytest-cov", specifier = ">=5.0.0" },

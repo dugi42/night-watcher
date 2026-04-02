@@ -4,6 +4,19 @@ Versioned release plan.  Each release is a stable tag on `main`.
 
 ---
 
+## v1.2.1 — Coverage & Metadata Sync ✅ Released
+
+> Code-only.  No hardware changes required.
+
+### Quality
+
+| Change | File | Why |
+| --- | --- | --- |
+| Expand `service.py` unit coverage across detection loop, stream, health, and lifespan paths | `tests/test_service.py` | Raises coverage on the service module and locks down branch behavior that previously went untested |
+| Centralize runtime version and bump project metadata to `1.2.1` | `src/__init__.py`, `src/service.py`, `src/telemetry.py`, `pyproject.toml`, `CITATION.cff` | Keeps FastAPI, telemetry resources, packaging, and citation metadata aligned for the next patch tag |
+
+---
+
 ## v1.2 — Fully Pi-Side Stack ✅ Released
 
 > Code-only.  No hardware changes required.

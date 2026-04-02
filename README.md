@@ -21,9 +21,9 @@ in a web dashboard.
 
 ---
 
-## Stable Release 1.2.0
+## Stable Release 1.2.1
 
-Night Watcher `1.2.0` completes the Pi-side stack — everything now runs on
+Night Watcher `1.2.1` completes the Pi-side stack — everything now runs on
 the Raspberry Pi, no local client required:
 
 - Real-time YOLO11n detection for people and animals.

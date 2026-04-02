@@ -44,6 +44,7 @@ from src.recorder import VideoRecorder
 from src.telemetry import AppMetrics, setup_health_telemetry, setup_telemetry
 from src.tracker import DetectionTracker
 from src.utils import setup_logging
+from src import __version__
 
 setup_logging()
 logger = logging.getLogger("night_watcher.service")
@@ -274,6 +275,7 @@ class DetectionLoop:
 
         cap = open_camera(0)
         if cap is None or not cap.isOpened():
+            async_detector.close()
             logger.error("Failed to open camera — detection loop will not run")
             return
 
@@ -372,7 +374,7 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _loop.stop()
 
 
-app = FastAPI(title="Night Watcher", version="1.0.0", lifespan=_lifespan)
+app = FastAPI(title="Night Watcher", version=__version__, lifespan=_lifespan)
 
 
 # ---------------------------------------------------------------------------

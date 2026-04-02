@@ -26,6 +26,8 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
+from src import __version__
+
 _OTEL_ENDPOINT = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel-collector:4318")
 _SERVICE_NAME = "night-watcher"
 
@@ -52,7 +54,7 @@ def setup_telemetry() -> AppMetrics:
         no-ops when the exporter is unavailable.
     """
     resource = Resource.create(
-        {"service.name": _SERVICE_NAME, "service.version": "1.0.0"}
+        {"service.name": _SERVICE_NAME, "service.version": __version__}
     )
 
     # --- Metrics provider ---
