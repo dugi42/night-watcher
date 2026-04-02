@@ -30,6 +30,7 @@ system delivers a complete Raspberry Pi wildlife monitoring stack with:
 - Session-based annotated video recording with persistent metadata storage.
 - A Streamlit dashboard for live video, detections, logs, and system health.
 - OpenTelemetry and Prometheus observability for runtime, thermal, and power metrics.
+- A standalone `metrics-exporter` service that records hardware and app metrics independently of the dashboard — temperature history never resets on Streamlit restart.
 - Docker Compose deployment for repeatable operation on the Raspberry Pi.
 
 ---
@@ -56,15 +57,17 @@ system delivers a complete Raspberry Pi wildlife monitoring stack with:
 │  │          recordings      history    │   │        └──────────────────────────────┘
 │  │  FastAPI :8000                      │   │
 │  └────────────┬────────────────────────┘   │
-│               │ OTLP HTTP                  │
-│  ┌────────────▼────────────────────────┐   │
-│  │  otel-collector  :4317/:4318        │   │
-│  │  Prometheus scrape endpoint :9464   │   │
-│  └────────────┬────────────────────────┘   │
-│               │ scrape :9464               │
-│  ┌────────────▼────────────────────────┐   │
-│  │  prometheus  :9090                  │   │
-│  └─────────────────────────────────────┘   │
+│               │ OTLP HTTP        │ /metrics/app (poll)
+│  ┌────────────▼──────────┐  ┌────▼────────────────────────┐
+│  │  otel-collector       │  │  metrics-exporter  :9100    │
+│  │  :4317/:4318          │  │  psutil · vcgencmd · SQLite  │
+│  │  scrape endpoint:9464 │  └────────────┬────────────────┘
+│  └────────────┬──────────┘               │ scrape :9100
+│               │ scrape :9464             │
+│  ┌────────────▼─────────────────────────▼┐
+│  │  prometheus  :9090                    │
+│  │  30-day retention                     │
+│  └───────────────────────────────────────┘
 └────────────────────────────────────────────┘
 ```
 
@@ -76,8 +79,18 @@ The **Pi service** (`src/service.py`) runs inside Docker:
 - Records an annotated MP4 video for each session.
 - Appends session metadata to `/assets/meta/detections.json`.
 - Writes structured logs to `/assets/logs/app.db` (SQLite).
-- Ships detection metrics, system health, and PMIC readings to the **OpenTelemetry Collector** via OTLP HTTP.
+- Ships detection metrics to the **OpenTelemetry Collector** via OTLP HTTP.
 - Exposes an HTTP API on port **8000**.
+
+The **metrics-exporter** (`src/exporter.py`) runs as a separate Docker service.
+It collects all hardware and application metrics independently of the Streamlit dashboard,
+so time-series data (including CPU temperature) persists across dashboard restarts:
+
+- Reads hardware metrics directly: CPU, memory, disk, temperature, CPU frequency, uptime.
+- Reads PMIC voltage/current/power via `vcgencmd pmic_read_adc` (Raspberry Pi 5).
+- Polls the FastAPI service every 15 s for app counters (frames, FPS, detections, sessions).
+- Queries the SQLite log database for log counts by level and recent error rate.
+- Exposes a standard Prometheus `/metrics` endpoint on port **9100**.
 
 The **Streamlit client** (`app.py`) runs on your local machine. It requires
 no camera or GPU and connects to the Pi over the network.
@@ -100,11 +113,12 @@ cd night-watcher
 docker compose up --build -d
 ```
 
-This starts three services:
+This starts four services:
 
 | Service | Port(s) | Purpose |
 | --- | --- | --- |
 | `night-watcher` | `8000` | Camera, YOLO detection, HTTP API |
+| `metrics-exporter` | `9100` | Standalone Prometheus exporter — hardware metrics, app counters, log stats |
 | `otel-collector` | `4317` (gRPC), `4318` (HTTP), `9464` (Prometheus scrape) | Receives OTLP, exposes metrics |
 | `prometheus` | `9090` | Scrapes and stores time-series metrics (30-day retention) |
 
@@ -257,63 +271,73 @@ level filtering (DEBUG / INFO / WARNING / ERROR / CRITICAL).
 
 ## Observability Stack
 
+### Standalone metrics exporter
+
+`src/exporter.py` runs as a dedicated Docker service and is the primary source
+of hardware and application metrics in Prometheus. It reads data directly —
+no OTel SDK in the path — so metrics are always present and never depend on
+the Streamlit dashboard being open.
+
+| Category | Prometheus metric | Description |
+| --- | --- | --- |
+| **Hardware** | `night_watcher_hw_cpu_percent` | CPU utilization (%) |
+| | `night_watcher_hw_memory_percent` | RAM utilization (%) |
+| | `night_watcher_hw_memory_used_mb` | RAM used (MB) |
+| | `night_watcher_hw_disk_percent` | Disk utilization (%) on `/assets` |
+| | `night_watcher_hw_disk_used_gb` | Disk used (GB) on `/assets` |
+| | `night_watcher_hw_temperature_c` | CPU temperature (°C) |
+| | `night_watcher_hw_cpu_freq_mhz` | CPU clock frequency (MHz) |
+| | `night_watcher_hw_uptime_seconds` | System uptime (s) |
+| **PMIC** | `night_watcher_pmic_ext5v_v` | USB-C supply input voltage (V) |
+| | `night_watcher_pmic_total_power_w` | Total system power (W) |
+| | `night_watcher_pmic_under_voltage` | Under-voltage flag (1 = below 4.75 V) |
+| | `night_watcher_pmic_rail_voltage_v{rail}` | Per-rail voltage (V) |
+| | `night_watcher_pmic_rail_current_a{rail}` | Per-rail current (A) |
+| **App** | `night_watcher_app_service_up` | FastAPI reachability (1 = up) |
+| | `night_watcher_app_frames_total` | Frames processed since service start |
+| | `night_watcher_app_fps_avg` | Average FPS over service uptime |
+| | `night_watcher_app_avg_processing_ms` | Average YOLO inference latency (ms) |
+| | `night_watcher_app_sessions_total` | Detection sessions started |
+| | `night_watcher_app_detections_total{class_name}` | Detections by YOLO class |
+| **Logs** | `night_watcher_log_count_total{level}` | Total log entries by level |
+| | `night_watcher_log_errors_last_5m` | ERROR/CRITICAL entries in last 5 min |
+
 ### OpenTelemetry
 
-The app uses the **OpenTelemetry SDK** (`opentelemetry-sdk`) to emit:
+The FastAPI service also emits detection pipeline metrics via the **OpenTelemetry SDK**:
 
 | Signal | Instruments |
 | --- | --- |
 | **Detection metrics** | `night_watcher.frames.processed` (counter), `night_watcher.frames.processing_ms` (histogram), `night_watcher.detections.total` (counter by class), `night_watcher.sessions.started` (counter) |
-| **System health** | `system.cpu.percent`, `system.memory.percent`, `system.disk.percent`, `system.temperature_c`, `system.cpu.frequency_mhz` (observable gauges, polled every 15 s) |
-| **PMIC power** | `pmic.ext5v_v`, `pmic.total_power_w`, `pmic.rail.voltage_v{rail}`, `pmic.rail.current_a{rail}` (observable gauges, polled every 15 s) |
 | Traces | Span exporter to OTel Collector (for future instrumentation) |
 
-Metrics are exported every 15 s via **OTLP HTTP** to the `otel-collector`
-service, which exposes them on a Prometheus scrape endpoint (`:9464`).
-
-If the OTel Collector is unreachable at startup, the SDK silently falls back
-to a no-op provider — the application keeps running.
+Metrics flow via **OTLP HTTP** → `otel-collector` → Prometheus scrape endpoint (`:9464`).
+If the OTel Collector is unreachable at startup the SDK silently falls back to a no-op
+provider — the application keeps running.
 
 ### Prometheus
 
-Prometheus scrapes the OTel Collector every 15 s and retains data for **30
-days**.  Access the UI at `http://<your-pi-hostname>:9090`.
-
-Metric names in Prometheus (the otel-collector config adds the `night_watcher` namespace):
-
-```promql
-# System health
-night_watcher_system_cpu_percent
-night_watcher_system_memory_percent
-night_watcher_system_disk_percent
-night_watcher_system_temperature_c
-night_watcher_system_cpu_frequency_mhz
-
-# PMIC power rails
-night_watcher_pmic_ext5v_v
-night_watcher_pmic_total_power_w
-night_watcher_pmic_rail_voltage_v{rail="VDD_CORE"}
-night_watcher_pmic_rail_current_a{rail="VDD_CORE"}
-
-# Detection pipeline
-night_watcher_night_watcher_frames_processed_total
-night_watcher_night_watcher_detections_total
-```
+Prometheus scrapes both the `metrics-exporter` (`:9100`) and the OTel Collector
+(`:9464`) every 15 s, and retains data for **30 days**. Access the UI at
+`http://<your-pi-hostname>:9090`.
 
 Example queries:
 
 ```promql
 # CPU temperature over the last hour
-night_watcher_system_temperature_c
+night_watcher_hw_temperature_c
 
 # Input voltage — detect brown-outs
 min_over_time(night_watcher_pmic_ext5v_v[1h])
 
-# CPU core current P95 over the last 5 minutes
-histogram_quantile(0.95, rate(night_watcher_pmic_rail_current_a_bucket{rail="VDD_CORE"}[5m]))
-
 # Total system power
 night_watcher_pmic_total_power_w
+
+# App service availability
+night_watcher_app_service_up
+
+# Error spike in the last 5 minutes
+night_watcher_log_errors_last_5m
 ```
 
 ### Structured Logs (SQLite)
@@ -356,6 +380,9 @@ and injects the results into the **Long-term Health Report** section below.
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://otel-collector:4318` | OTel Collector HTTP endpoint |
 | `RASPI_URL` | `http://raspberrypi.local:8000` | Pi service URL (client-side only) |
 | `PROMETHEUS_URL` | `http://raspberrypi.local:9090` | Prometheus URL (client-side only) |
+| `NIGHT_WATCHER_URL` | `http://night-watcher:8000` | FastAPI URL polled by `metrics-exporter` |
+| `COLLECT_INTERVAL` | `15` | Scrape interval in seconds for `metrics-exporter` |
+| `EXPORTER_PORT` | `9100` | HTTP port exposed by `metrics-exporter` |
 
 ### Detection config (live, via dashboard or API)
 
