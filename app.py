@@ -1,18 +1,20 @@
 """Streamlit dashboard for Night Watcher — runs as a Docker service on the Raspberry Pi.
 
 Connects to the FastAPI detection service and Grafana instance running in the
-same Docker Compose stack.  All URLs default to the Pi-side Docker network and
-the Pi's mDNS hostname so that embedded streams and links are reachable from
-any browser on the same LAN.
+same Docker Compose stack. API calls are made from the Streamlit backend,
+while browser-facing stream, video, and Grafana links can be derived from the
+current request so the dashboard still works when accessed through a proxy.
 
 Environment variables (set via docker-compose or shell):
-    RASPI_URL       Base URL of the FastAPI service (default: http://raspberrypi.local:8000).
-                    Must be reachable from the user's browser — used for the MJPEG stream
-                    and video playback embeds as well as server-side API calls.
-    PROMETHEUS_URL  Prometheus base URL (default: http://prometheus:9090).
-                    Server-side only (not embedded in the browser directly).
-    GRAFANA_URL     Grafana base URL (default: http://raspberrypi.local:3000).
-                    Linked from the Health tab — must be reachable from the browser.
+    RASPI_URL        Internal FastAPI service URL (default: http://night-watcher:8000).
+                     Used by the Streamlit backend for API calls.
+    PUBLIC_RASPI_URL Browser-visible FastAPI URL for the MJPEG stream, video playback,
+                     and full-screen links. If unset, it is derived from the current
+                     dashboard request by swapping port 8501 for 8000.
+    PROMETHEUS_URL   Prometheus base URL (default: http://prometheus:9090).
+                     Server-side only (not embedded in the browser directly).
+    GRAFANA_URL      Browser-visible Grafana URL. If unset, it is derived from the
+                     current dashboard request by swapping port 8501 for 3000.
 
 Usage (docker compose, see docker-compose.yml):
     streamlit run app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
@@ -23,19 +25,100 @@ import os
 from collections import Counter
 from datetime import datetime, time as dt_time
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import pandas as pd
 import requests
 import streamlit as st
 
-# Default to the Pi's mDNS hostname so the MJPEG stream and video embeds work
-# from any browser on the local network, even though the dashboard itself runs
-# inside Docker on the Pi.
-DEFAULT_URL = os.getenv("RASPI_URL", "http://raspberrypi.local:8000")
+# Use the Docker-internal API host for server-side requests. Browser-facing
+# URLs are derived separately from the incoming request or explicit overrides.
+DEFAULT_URL = os.getenv("RASPI_URL", "http://night-watcher:8000")
 DEFAULT_PROM_URL = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
-DEFAULT_GRAFANA_URL = os.getenv("GRAFANA_URL", "http://raspberrypi.local:3000")
 
 logger = logging.getLogger("night_watcher.client")
+
+
+def _context_header(*names: str) -> str | None:
+    """Return the first matching request header from Streamlit context."""
+    try:
+        headers = st.context.headers
+    except Exception:
+        return None
+
+    for name in names:
+        value = headers.get(name)
+        if value:
+            return value
+    return None
+
+
+def _request_origin() -> str | None:
+    """Return the browser-visible scheme and host for the current request."""
+    try:
+        current_url = st.context.url
+    except Exception:
+        current_url = None
+
+    if current_url:
+        parts = urlsplit(current_url)
+        if parts.scheme and parts.netloc:
+            return urlunsplit((parts.scheme, parts.netloc, "", "", ""))
+
+    forwarded_host = _context_header("X-Forwarded-Host", "x-forwarded-host", "Host", "host")
+    if not forwarded_host:
+        return None
+
+    forwarded_proto = _context_header("X-Forwarded-Proto", "x-forwarded-proto", "X-Scheme", "x-scheme")
+    scheme = forwarded_proto or "http"
+    return f"{scheme}://{forwarded_host}"
+
+
+def _with_port(base_url: str, port: int) -> str:
+    """Replace the port of *base_url* while preserving scheme and hostname."""
+    parts = urlsplit(base_url)
+    if not parts.scheme or not parts.hostname:
+        return base_url.rstrip("/")
+
+    userinfo = ""
+    if parts.username:
+        userinfo = parts.username
+        if parts.password:
+            userinfo += f":{parts.password}"
+        userinfo += "@"
+
+    host = parts.hostname
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+
+    netloc = f"{userinfo}{host}:{port}"
+    return urlunsplit((parts.scheme, netloc, "", "", "")).rstrip("/")
+
+
+def _default_public_api_url() -> str:
+    """Return the browser-visible FastAPI base URL."""
+    configured = os.getenv("PUBLIC_RASPI_URL")
+    if configured:
+        return configured.rstrip("/")
+
+    origin = _request_origin()
+    if origin:
+        return _with_port(origin, 8000)
+
+    return "http://raspberrypi.local:8000"
+
+
+def _default_grafana_url() -> str:
+    """Return the browser-visible Grafana base URL."""
+    configured = os.getenv("GRAFANA_URL")
+    if configured:
+        return configured.rstrip("/")
+
+    origin = _request_origin()
+    if origin:
+        return _with_port(origin, 3000)
+
+    return "http://raspberrypi.local:3000"
 
 
 def _post(path: str, base_url: str, payload: dict[str, Any], timeout: float = 3.0) -> requests.Response | None:
@@ -100,8 +183,8 @@ def _get(path: str, base_url: str, timeout: float = 3.0) -> requests.Response | 
 
 
 
-def _render_sidebar() -> tuple[str, str, str]:
-    """Render the sidebar and return ``(pi_url, prometheus_url, grafana_url)``.
+def _render_sidebar() -> tuple[str, str, str, str]:
+    """Render the sidebar and return API and browser-facing service URLs.
 
     Displays the logo, URL inputs, connectivity indicator, and the Detection
     Control panel (enable toggle, optional time schedule, Apply button with
@@ -109,25 +192,37 @@ def _render_sidebar() -> tuple[str, str, str]:
 
     Returns
     -------
-    tuple[str, str, str]
-        ``(pi_service_url, prometheus_url, grafana_url)`` — all with trailing slash stripped.
+    tuple[str, str, str, str]
+        ``(api_url, public_api_url, prometheus_url, grafana_url)`` — all with trailing slash stripped.
     """
     with st.sidebar:
         st.image("assets/logo.jpeg", width="stretch")
         st.title("Night Watcher")
-        url = st.text_input("Pi service URL", value=DEFAULT_URL)
+        api_url = st.text_input(
+            "Pi API URL",
+            value=DEFAULT_URL,
+            help="Used by the Streamlit backend for health checks, stats, and control requests.",
+        )
+        public_url = st.text_input(
+            "Public media URL",
+            value=_default_public_api_url(),
+            help="Used by your browser for the live stream, video playback, and full-screen links.",
+        )
         prom_url = st.text_input("Prometheus URL", value=DEFAULT_PROM_URL,
                                   help="Prometheus backend (used by Grafana for dashboards)")
-        grafana_url = st.text_input("Grafana URL", value=DEFAULT_GRAFANA_URL,
-                                     help="Grafana instance for time-series dashboards")
+        grafana_url = st.text_input(
+            "Grafana URL",
+            value=_default_grafana_url(),
+            help="Browser-visible Grafana URL for the Health tab link.",
+        )
 
-        resp = _get("/health", url, timeout=2.0)
+        resp = _get("/health", api_url, timeout=2.0)
         if resp is not None:
             st.success(f"Pi reachable — HTTP {resp.status_code}")
-            logger.debug("Health check OK: %s", url)
+            logger.debug("Health check OK: %s", api_url)
         else:
             st.error("Pi unreachable — no response")
-            logger.warning("Health check failed: %s", url)
+            logger.warning("Health check failed: %s", api_url)
 
         st.divider()
         st.subheader("Detection Control")
@@ -140,10 +235,10 @@ def _render_sidebar() -> tuple[str, str, str]:
             else:
                 st.error(fb_msg)
 
-        cfg_resp = _get("/detection/config", url, timeout=2.0)
+        cfg_resp = _get("/detection/config", api_url, timeout=2.0)
         if cfg_resp is None:
             st.warning("Could not fetch detection config.")
-            logger.warning("GET /detection/config failed for %s", url)
+            logger.warning("GET /detection/config failed for %s", api_url)
         else:
             cfg: dict[str, Any] = cfg_resp.json()
             st.caption(f"Config loaded — HTTP {cfg_resp.status_code}")
@@ -187,7 +282,7 @@ def _render_sidebar() -> tuple[str, str, str]:
                     "conf_threshold": conf_threshold,
                 }
                 logger.info("Applying detection config: %s", payload)
-                result = _post("/detection/config", url, payload)
+                result = _post("/detection/config", api_url, payload)
 
                 if result is not None:
                     cfg_back: dict[str, Any] = result.json()
@@ -212,14 +307,19 @@ def _render_sidebar() -> tuple[str, str, str]:
                         "error",
                         "Failed to reach Pi — config not applied",
                     )
-                    logger.error("POST /detection/config failed: Pi unreachable at %s", url)
+                    logger.error("POST /detection/config failed: Pi unreachable at %s", api_url)
 
                 st.rerun()
 
-    return url.rstrip("/"), prom_url.rstrip("/"), grafana_url.rstrip("/")
+    return (
+        api_url.rstrip("/"),
+        public_url.rstrip("/"),
+        prom_url.rstrip("/"),
+        grafana_url.rstrip("/"),
+    )
 
 
-def _render_stream_tab(url: str) -> None:
+def _render_stream_tab(api_url: str, public_url: str) -> None:
     """Render the live MJPEG stream with frame timestamp and full-screen controls.
 
     The stream is embedded via an HTML ``<img>`` tag pointing directly at the
@@ -229,10 +329,12 @@ def _render_stream_tab(url: str) -> None:
 
     Parameters
     ----------
-    url:
-        Pi service base URL, e.g. ``"http://raspi.local:8000"``.
+    api_url:
+        Internal FastAPI base URL used by the Streamlit backend.
+    public_url:
+        Browser-visible FastAPI base URL used for stream embeds and links.
     """
-    stream_url = f"{url}/stream"
+    stream_url = f"{public_url}/stream"
     logger.debug("Rendering stream from %s", stream_url)
 
     # Header row: title + full-screen link
@@ -304,7 +406,7 @@ def _render_stream_tab(url: str) -> None:
 
     @st.fragment(run_every=3)
     def _stream_status() -> None:
-        resp = _get("/status", url)
+        resp = _get("/status", api_url)
         if resp is not None:
             status: dict[str, Any] = resp.json()
             classes: str = ", ".join(status.get("detected_classes", [])) or "none"
@@ -326,12 +428,12 @@ def _render_stream_tab(url: str) -> None:
                 st.info("Detection is currently paused. Enable it in the sidebar.")
         else:
             st.warning("Could not fetch status from Pi.")
-            logger.warning("GET /status failed for %s", url)
+            logger.warning("GET /status failed for %s", api_url)
 
     _stream_status()
 
 
-def _render_stats_tab(url: str) -> None:
+def _render_stats_tab(api_url: str, public_url: str) -> None:
     """Render detection statistics and recorded session clips.
 
     Fetches the full session history from the Pi's ``/detections`` endpoint
@@ -344,8 +446,10 @@ def _render_stats_tab(url: str) -> None:
 
     Parameters
     ----------
-    url:
-        Pi service base URL, e.g. ``"http://raspi.local:8000"``.
+    api_url:
+        Internal FastAPI base URL used for JSON API requests.
+    public_url:
+        Browser-visible FastAPI base URL used for MP4 playback.
     """
     st.header("Detection Statistics")
 
@@ -353,10 +457,10 @@ def _render_stats_tab(url: str) -> None:
         logger.debug("Stats refresh requested")
         st.rerun()
 
-    resp = _get("/detections", url, timeout=5.0)
+    resp = _get("/detections", api_url, timeout=5.0)
     if resp is None:
         st.error("Could not fetch detection history from Pi.")
-        logger.error("GET /detections failed for %s", url)
+        logger.error("GET /detections failed for %s", api_url)
         return
 
     sessions: list[dict[str, Any]] = resp.json()
@@ -442,11 +546,11 @@ def _render_stats_tab(url: str) -> None:
                     st.dataframe(pd.DataFrame(obj_rows), hide_index=True, width="stretch")
 
             with right:
-                video_url = f"{url}/video/{uid}"
+                video_url = f"{public_url}/video/{uid}"
                 st.video(video_url)
 
 
-def _render_health_tab(url: str, prom_url: str, grafana_url: str) -> None:
+def _render_health_tab(api_url: str, prom_url: str, grafana_url: str) -> None:
     """Render system health, Docker service status, app metrics, and logs.
 
     Shows live KPI metrics as numbers only. For time-series analysis and
@@ -454,8 +558,8 @@ def _render_health_tab(url: str, prom_url: str, grafana_url: str) -> None:
 
     Parameters
     ----------
-    url:
-        Pi service base URL, e.g. ``"http://raspi.local:8000"``.
+    api_url:
+        Internal FastAPI base URL, e.g. ``"http://night-watcher:8000"``.
     prom_url:
         Prometheus base URL (informational, shown in sidebar).
     grafana_url:
@@ -470,7 +574,7 @@ def _render_health_tab(url: str, prom_url: str, grafana_url: str) -> None:
 
     @st.fragment(run_every=10)
     def _power_status() -> None:
-        resp = _get("/health/power", url, timeout=4.0)
+        resp = _get("/health/power", api_url, timeout=4.0)
         st.subheader("Power & Throttle Status")
         st.caption(f"Refreshes every 10 s — last update {datetime.now().strftime('%H:%M:%S')}")
 
@@ -532,7 +636,7 @@ def _render_health_tab(url: str, prom_url: str, grafana_url: str) -> None:
 
     @st.fragment(run_every=5)
     def _pmic_readings() -> None:
-        resp = _get("/health/pmic", url, timeout=4.0)
+        resp = _get("/health/pmic", api_url, timeout=4.0)
         st.subheader("Voltage & Current (PMIC)")
         st.caption(f"Refreshes every 5 s — last update {datetime.now().strftime('%H:%M:%S')}")
 
@@ -593,7 +697,7 @@ def _render_health_tab(url: str, prom_url: str, grafana_url: str) -> None:
 
     @st.fragment(run_every=5)
     def _system_metrics() -> None:
-        resp = _get("/health/detailed", url, timeout=4.0)
+        resp = _get("/health/detailed", api_url, timeout=4.0)
         if resp is None:
             st.warning("Could not fetch system health from Pi.")
             return
@@ -649,7 +753,7 @@ def _render_health_tab(url: str, prom_url: str, grafana_url: str) -> None:
     @st.fragment(run_every=10)
     def _docker_services() -> None:
         st.subheader("Docker Services")
-        resp = _get("/health/docker", url, timeout=5.0)
+        resp = _get("/health/docker", api_url, timeout=5.0)
         if resp is None:
             st.warning("Could not fetch Docker service list from Pi.")
             return
@@ -678,7 +782,7 @@ def _render_health_tab(url: str, prom_url: str, grafana_url: str) -> None:
     @st.fragment(run_every=5)
     def _app_metrics() -> None:
         st.subheader("Application Metrics")
-        resp = _get("/metrics/app", url, timeout=3.0)
+        resp = _get("/metrics/app", api_url, timeout=3.0)
         if resp is None:
             st.warning("Could not fetch application metrics from Pi.")
             return
@@ -723,7 +827,7 @@ def _render_health_tab(url: str, prom_url: str, grafana_url: str) -> None:
         resp = _get(
             f"/logs?limit={int(log_limit)}"
             + (f"&level={lvl_param}" if lvl_param else ""),
-            url,
+            api_url,
             timeout=5.0,
         )
         if resp is None:
@@ -787,9 +891,8 @@ def _fmt_uptime(seconds: int) -> str:
 def main() -> None:
     """Entry point for the Streamlit client application.
 
-    Configures the page, sets up logging, renders the sidebar (which returns
-    the active Pi URL and Prometheus URL), then renders the Live Stream,
-    Statistics, and Health tabs.
+    Configures the page, sets up logging, renders the sidebar, then renders
+    the Live Stream, Statistics, and Health tabs.
     """
     logging.basicConfig(
         level=logging.INFO,
@@ -804,20 +907,20 @@ def main() -> None:
 
     logger.info("Night Watcher client started")
 
-    url, prom_url, grafana_url = _render_sidebar()
+    api_url, public_url, prom_url, grafana_url = _render_sidebar()
 
     tab_stream, tab_stats, tab_health = st.tabs(
         ["📷 Live Stream", "📊 Statistics", "🩺 Health"]
     )
 
     with tab_stream:
-        _render_stream_tab(url)
+        _render_stream_tab(api_url, public_url)
 
     with tab_stats:
-        _render_stats_tab(url)
+        _render_stats_tab(api_url, public_url)
 
     with tab_health:
-        _render_health_tab(url, prom_url, grafana_url)
+        _render_health_tab(api_url, prom_url, grafana_url)
 
 
 if __name__ == "__main__":

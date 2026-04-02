@@ -98,9 +98,9 @@ services:
   # Streamlit dashboard — runs on the Pi, accessible from any browser on the
   # LAN at http://<pi-hostname>:8501.
   #
-  # RASPI_URL and GRAFANA_URL must use the Pi's public hostname (not the Docker
-  # internal service name) because these URLs are embedded in the browser for
-  # the MJPEG stream, video playback, and Grafana links.
+  # The dashboard talks to FastAPI over the Docker network, while browser-facing
+  # stream/video/Grafana links are derived from the incoming request unless
+  # explicit public URLs are provided via PUBLIC_RASPI_URL and GRAFANA_URL.
   # ---------------------------------------------------------------------------
   dashboard:
     build: .
@@ -114,9 +114,11 @@ services:
       - "8501:8501"
     environment:
       - PYTHONUNBUFFERED=1
-      - RASPI_URL=http://raspberrypi.local:8000
+      - RASPI_URL=http://night-watcher:8000
       - PROMETHEUS_URL=http://prometheus:9090
-      - GRAFANA_URL=http://raspberrypi.local:3000
+      # Optional browser-visible overrides for reverse proxies or path-based routing:
+      # - PUBLIC_RASPI_URL=https://your-public-host/night-watcher-api
+      # - GRAFANA_URL=https://your-public-host/grafana
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
