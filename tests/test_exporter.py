@@ -38,8 +38,10 @@ def _patch_all_gauges(monkeypatch) -> dict[str, _FakeGauge]:
     """Replace every module-level gauge in exporter with a _FakeGauge."""
     gauges: dict[str, _FakeGauge] = {}
     gauge_names = [
-        "hw_cpu_percent", "hw_memory_percent", "hw_memory_used_mb",
-        "hw_disk_percent", "hw_disk_used_gb", "hw_temperature_c",
+        "hw_cpu_percent",
+        "hw_memory_percent", "hw_memory_used_mb", "hw_memory_total_mb", "hw_memory_available_mb",
+        "hw_disk_percent", "hw_disk_used_gb", "hw_disk_total_gb", "hw_disk_free_gb",
+        "hw_temperature_c",
         "hw_cpu_freq_mhz", "hw_uptime_seconds",
         "pmic_ext5v_v", "pmic_total_power_w", "pmic_under_voltage",
         "pmic_rail_voltage_v", "pmic_rail_current_a",
@@ -121,12 +123,22 @@ def test_collect_hardware_sets_all_gauges(monkeypatch):
     monkeypatch.setattr(
         psutil,
         "virtual_memory",
-        lambda: SimpleNamespace(percent=61.0, used=2 * 1024**2),
+        lambda: SimpleNamespace(
+            percent=61.0,
+            used=2 * 1024**2,
+            total=4 * 1024**2,
+            available=2 * 1024**2,
+        ),
     )
     monkeypatch.setattr(
         psutil,
         "disk_usage",
-        lambda path: SimpleNamespace(percent=33.0, used=8 * 1024**3),
+        lambda path: SimpleNamespace(
+            percent=33.0,
+            used=8 * 1024**3,
+            total=24 * 1024**3,
+            free=16 * 1024**3,
+        ),
     )
     monkeypatch.setattr(psutil, "cpu_freq", lambda: SimpleNamespace(current=1800.0))
     monkeypatch.setattr(psutil, "boot_time", lambda: time.time() - 3600)
@@ -141,8 +153,12 @@ def test_collect_hardware_sets_all_gauges(monkeypatch):
     assert gauges["hw_cpu_percent"].value == 42.0
     assert gauges["hw_memory_percent"].value == 61.0
     assert gauges["hw_memory_used_mb"].value == 2.0
+    assert gauges["hw_memory_total_mb"].value == 4.0
+    assert gauges["hw_memory_available_mb"].value == 2.0
     assert gauges["hw_disk_percent"].value == 33.0
     assert gauges["hw_disk_used_gb"].value == 8.0
+    assert gauges["hw_disk_total_gb"].value == 24.0
+    assert gauges["hw_disk_free_gb"].value == 16.0
     assert gauges["hw_temperature_c"].value == 55.3
     assert gauges["hw_cpu_freq_mhz"].value == 1800.0
     assert gauges["hw_uptime_seconds"].value is not None
@@ -153,10 +169,14 @@ def test_collect_hardware_skips_temperature_when_none(monkeypatch):
 
     monkeypatch.setattr(psutil, "cpu_percent", lambda interval=None: 10.0)
     monkeypatch.setattr(
-        psutil, "virtual_memory", lambda: SimpleNamespace(percent=20.0, used=512 * 1024**2)
+        psutil,
+        "virtual_memory",
+        lambda: SimpleNamespace(percent=20.0, used=512 * 1024**2, total=1024 * 1024**2, available=512 * 1024**2),
     )
     monkeypatch.setattr(
-        psutil, "disk_usage", lambda p: SimpleNamespace(percent=5.0, used=1 * 1024**3)
+        psutil,
+        "disk_usage",
+        lambda p: SimpleNamespace(percent=5.0, used=1 * 1024**3, total=20 * 1024**3, free=19 * 1024**3),
     )
     monkeypatch.setattr(psutil, "cpu_freq", lambda: None)
     monkeypatch.setattr(psutil, "boot_time", lambda: time.time() - 100)

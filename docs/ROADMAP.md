@@ -4,30 +4,33 @@ Versioned release plan.  Each release is a stable tag on `main`.
 
 ---
 
-## v1.1 — Performance & Reliability
+## v1.1 — Observability & Frontend Cleanup ✅ Released
 
 > Code-only.  No hardware changes required.
 
-### Detection pipeline
+### Metrics
 
 | Change | File | Why |
 | --- | --- | --- |
-| Move `cv2.VideoWriter.write()` to a dedicated background thread | `src/recorder.py` | Each frame write blocks the capture loop for 15–25 ms, causing frame drops during recording sessions |
-| Move session JSON persistence off the capture thread | `src/tracker.py` | File I/O on session end blocks the loop for 10–50 ms |
-| Adaptive sleep in the capture loop | `src/service.py` | Fixed 50 ms sleep ignores actual frame processing time; replace with `max(0, target_interval - elapsed)` |
+| Add absolute memory metrics: `hw_memory_total_mb`, `hw_memory_available_mb` | `src/exporter.py` | % alone is not actionable — operators need raw MB to size the system |
+| Add absolute disk metrics: `hw_disk_total_gb`, `hw_disk_free_gb` | `src/exporter.py` | Disk-full alerts require the free and total values in GB |
+| Fix YOLO inference timing — measure inside background worker thread | `src/detector.py`, `src/service.py` | Prior `avg_processing_ms` included camera I/O and was near-zero for async frames; `last_inference_ms` now reflects actual model latency |
 
-### Metrics & health
+### Grafana
 
 | Change | File | Why |
 | --- | --- | --- |
-| Non-blocking CPU sampling in the exporter | `src/exporter.py` | `psutil.cpu_percent(interval=0.5)` blocks for 500 ms every collection cycle; switch to `interval=None` and sample at the *start* of the next cycle |
-| Cache `psutil.cpu_percent` in health endpoints | `src/health.py` | `/health/detailed` blocks 200 ms per request; reuse the exporter's latest gauge value instead |
-| Cache Prometheus range queries in `st.session_state` | `app.py` | Every Streamlit rerun refetches from Prometheus; a 30 s TTL cache eliminates redundant queries |
-| Paginate `/detections` endpoint | `src/service.py` | Full history JSON can be hundreds of KB; add `?limit=&offset=` query parameters |
+| Add Grafana service to Docker Compose (port 3000) | `docker-compose.yml` | Replaces custom Streamlit time-series charts with a production-grade dashboard tool |
+| Auto-provision Prometheus datasource | `grafana/provisioning/datasources/prometheus.yml` | No manual setup after `docker compose up` |
+| Anonymous viewer access | `docker-compose.yml` | Streamlit can link directly to Grafana panels without requiring credentials |
 
-### Operations
+### Frontend
 
-- Add Docker `mem_limit` and `cpus` constraints to `docker-compose.yml` so Prometheus and the OTel Collector cannot starve the detection service under load.
+| Change | File | Why |
+| --- | --- | --- |
+| Remove all time-series line charts from the Health tab | `app.py` | Charts are now in Grafana; duplicating them in Streamlit adds complexity and stale query logic |
+| Add Grafana link at the top of the Health tab | `app.py` | One-click access to historical dashboards |
+| Remove redundant frame timestamp from Live Stream status row | `app.py` | Timestamp is already burned into every frame server-side; the metric box was noise |
 
 ---
 
@@ -51,7 +54,7 @@ Versioned release plan.  Each release is a stable tag on `main`.
   - `night_watcher_env_enclosure_humidity_pct`
 - **Condensation-risk alert** — flag in `/health/environment` when enclosure dew point is within 3 °C of enclosure temperature; surface as a warning in the Health tab.
 - **Controlled shutdown** — watchdog thread that calls `systemctl poweroff` when enclosure temperature exceeds a configurable threshold (default 65 °C inside the box).
-- New Streamlit Health section — "Environmental" panel with live readings and historical charts.
+- New Streamlit Health section — "Environmental" panel with live readings.
 
 ---
 
@@ -129,5 +132,5 @@ Versioned release plan.  Each release is a stable tag on `main`.
 ## Pending (unscheduled)
 
 - **Photo documentation of the mechanical build** — see [`BUILD.md`](BUILD.md).
-- **Grafana dashboard** — replace the custom Streamlit Health tab charts with a Grafana dashboard JSON provisioned via `docker-compose.yml`.  Grafana renders Prometheus range queries natively and supports alerting rules without custom Python.
 - **Multi-camera support** — generalize `src/service.py` to manage a pool of camera devices, each with its own detection loop and `/stream/{device_id}` endpoint.
+- **Detection pipeline performance** — background video writing, async session JSON persistence, adaptive sleep in capture loop (v1.1 roadmap items carried forward).

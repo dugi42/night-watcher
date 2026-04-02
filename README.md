@@ -21,14 +21,20 @@ in a web dashboard.
 
 ---
 
-## Stable Release 1.0.0
+## Stable Release 1.1.0
 
-Night Watcher `1.0.0` is the first stable release of the project. The current
-system delivers a complete Raspberry Pi wildlife monitoring stack with:
+Night Watcher `1.1.0` builds on the foundation of v1.0 with improved
+observability and a cleaner frontend:
 
 - Real-time YOLO11n detection for people and animals.
 - Session-based annotated video recording with persistent metadata storage.
-- A Streamlit dashboard for live video, detections, logs, and system health.
+- A Streamlit dashboard for live video, detections, and system health KPIs.
+- **Grafana** instance with Prometheus as the pre-configured datasource — all
+  metrics are accessible as time-series dashboards out of the box.
+- Every resource metric now ships both a percentage *and* an absolute value
+  (e.g. `disk_used_gb` + `disk_free_gb` + `disk_total_gb`).
+- YOLO inference time is measured inside the background worker thread so
+  `avg_processing_ms` reflects actual model latency, not camera I/O.
 - OpenTelemetry and Prometheus observability for runtime, thermal, and power metrics.
 - A standalone `metrics-exporter` service that records hardware and app metrics independently of the dashboard — temperature history never resets on Streamlit restart.
 - Docker Compose deployment for repeatable operation on the Raspberry Pi.
@@ -75,7 +81,7 @@ system delivers a complete Raspberry Pi wildlife monitoring stack with:
 │  │  metrics-exporter  :9100  │  (standalone Python process)          │
 │  │                           │                                       │
 │  │  polls every 15s:         │                                       │
-│  │  • psutil (CPU/mem/disk)  │                                       │
+│  │  • psutil (CPU/mem/disk)  │  → absolute + relative per metric     │
 │  │  • vcgencmd (PMIC rails)  │                                       │
 │  │  • /metrics/app  (HTTP)   │                                       │
 │  │  • SQLite log counts      │                                       │
@@ -91,6 +97,13 @@ system delivers a complete Raspberry Pi wildlife monitoring stack with:
 │  │                           │   │  • otel-collector:9464       │    │
 │  │  ← traces from service    │   │                              │    │
 │  └───────────────────────────┘   │  retention: 30d              │    │
+│                                  └──────────────┬──────────────┘    │
+│                                                 │ scrape             │
+│                                  ┌──────────────▼──────────────┐    │
+│                                  │  grafana  :3000              │    │
+│                                  │                              │    │
+│                                  │  datasource: Prometheus      │    │
+│                                  │  (auto-provisioned)          │    │
 │                                  └─────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────────┘
                               ▲
@@ -101,10 +114,10 @@ system delivers a complete Raspberry Pi wildlife monitoring stack with:
               │                               │
               │  • /frame, /stream  (MJPEG)   │
               │  • /status, /detections       │
-              │  • /health/**                 │
+              │  • /health/**  (live KPIs)    │
               │  • /detection/config          │
-              │  • prometheus range queries   │
               │  • /video/{uuid}  (playback)  │
+              │  • links to Grafana :3000     │
               └───────────────────────────────┘
 ```
 
@@ -150,7 +163,7 @@ cd night-watcher
 docker compose up --build -d
 ```
 
-This starts four services:
+This starts five services:
 
 | Service | Port(s) | Purpose |
 | --- | --- | --- |
@@ -158,6 +171,7 @@ This starts four services:
 | `metrics-exporter` | `9100` | Standalone Prometheus exporter — hardware metrics, app counters, log stats |
 | `otel-collector` | `4317` (gRPC), `4318` (HTTP), `9464` (Prometheus scrape) | Receives OTLP, exposes metrics |
 | `prometheus` | `9090` | Scrapes and stores time-series metrics (30-day retention) |
+| `grafana` | `3000` | Dashboards — Prometheus pre-configured as default datasource |
 
 On first build the YOLO11n weights are downloaded and baked into the image.
 
@@ -239,10 +253,10 @@ Open `http://localhost:8501` in your browser.
 
 ### 🩺 Health
 
-Auto-refreshes every 5–10 seconds using Streamlit fragments. Time-series
-charts query Prometheus for historical data (configurable window: 15 min to
-7 days); falls back to an in-memory rolling window when Prometheus is
-unreachable.
+Auto-refreshes every 5–10 seconds using Streamlit fragments. Displays live
+numeric KPIs for each subsystem. For historical time-series analysis, a
+prominent link at the top of the tab opens **Grafana** (`:3000`) where all
+Prometheus metrics are available as dashboards.
 
 | Section | Data source | Refresh |
 | --- | --- | --- |
@@ -253,15 +267,15 @@ unreachable.
 | Application Metrics | `/metrics/app` | 5 s |
 | Application Logs | `/logs` | 10 s |
 
-**Power & Throttle Status** shows current and historical throttling flags
-(under-voltage, frequency-capping, thermal soft limit) read via `vcgencmd`.
+**Power & Throttle Status** shows current throttling flags (under-voltage,
+frequency-capping, thermal soft limit) read via `vcgencmd`.
 
 **Voltage & Current (PMIC)** shows live USB-C input voltage, total system
 power, and CPU core voltage / current from the MXL7704 PMIC ADC channels,
-plus a per-rail breakdown table and historical trend charts.
+plus a per-rail breakdown table.
 
-**System Health** shows CPU %, memory, disk usage (progress bars), CPU
-temperature with a colour indicator (🟢 < 60 °C · 🟡 < 75 °C · 🔴 ≥ 75 °C),
+**System Health** shows CPU %, memory (used / total MB), disk (used / free / total GB),
+CPU temperature with a colour indicator (🟢 < 60 °C · 🟡 < 75 °C · 🔴 ≥ 75 °C),
 and system uptime.
 
 **Docker Services** lists all containers visible via the Docker socket with
@@ -269,7 +283,7 @@ their state (🟢 running · 🟡 other · 🔴 exited), image, status, and port
 bindings.
 
 **Application Metrics** shows frames processed since startup, average FPS,
-average frame processing time, session count, and a bar chart of detections
+average YOLO inference time (ms), session count, and a bar chart of detections
 by class.
 
 **Application Logs** shows the most recent log entries from SQLite with
@@ -320,8 +334,12 @@ the Streamlit dashboard being open.
 | **Hardware** | `night_watcher_hw_cpu_percent` | CPU utilization (%) |
 | | `night_watcher_hw_memory_percent` | RAM utilization (%) |
 | | `night_watcher_hw_memory_used_mb` | RAM used (MB) |
+| | `night_watcher_hw_memory_total_mb` | Total RAM installed (MB) |
+| | `night_watcher_hw_memory_available_mb` | Available RAM (MB) |
 | | `night_watcher_hw_disk_percent` | Disk utilization (%) on `/assets` |
 | | `night_watcher_hw_disk_used_gb` | Disk used (GB) on `/assets` |
+| | `night_watcher_hw_disk_total_gb` | Total disk capacity (GB) on `/assets` |
+| | `night_watcher_hw_disk_free_gb` | Free disk space (GB) on `/assets` |
 | | `night_watcher_hw_temperature_c` | CPU temperature (°C) |
 | | `night_watcher_hw_cpu_freq_mhz` | CPU clock frequency (MHz) |
 | | `night_watcher_hw_uptime_seconds` | System uptime (s) |
@@ -352,11 +370,23 @@ Metrics flow via **OTLP HTTP** → `otel-collector` → Prometheus scrape endpoi
 If the OTel Collector is unreachable at startup the SDK silently falls back to a no-op
 provider — the application keeps running.
 
+### Grafana
+
+Grafana runs on port **3000** and is the recommended tool for time-series
+dashboards. Prometheus is automatically configured as the default datasource
+on first start via `grafana/provisioning/datasources/prometheus.yml` — no
+manual setup required.
+
+Access the dashboard at `http://<your-pi-hostname>:3000`.
+Default credentials: `admin` / `nightwatcher`.
+Anonymous read-only access is enabled so the Streamlit dashboard can link
+directly to panels.
+
 ### Prometheus
 
 Prometheus scrapes both the `metrics-exporter` (`:9100`) and the OTel Collector
-(`:9464`) every 15 s, and retains data for **30 days**. Access the UI at
-`http://<your-pi-hostname>:9090`.
+(`:9464`) every 15 s, and retains data for **30 days**. Access the raw query UI
+at `http://<your-pi-hostname>:9090`.
 
 Example queries:
 
@@ -417,7 +447,8 @@ and input voltage.  Results are injected into `docs/RUN_REPORTS.md`.
 | `ASSETS_DIR` | `/assets` | Root for video, metadata, and logs |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://otel-collector:4318` | OTel Collector HTTP endpoint |
 | `RASPI_URL` | `http://raspberrypi.local:8000` | Pi service URL (client-side only) |
-| `PROMETHEUS_URL` | `http://raspberrypi.local:9090` | Prometheus URL (client-side only) |
+| `PROMETHEUS_URL` | `http://raspberrypi.local:9090` | Prometheus URL (shown in sidebar, used by Grafana) |
+| `GRAFANA_URL` | `http://raspberrypi.local:3000` | Grafana URL linked from the Health tab (client-side only) |
 | `NIGHT_WATCHER_URL` | `http://night-watcher:8000` | FastAPI URL polled by `metrics-exporter` |
 | `COLLECT_INTERVAL` | `15` | Scrape interval in seconds for `metrics-exporter` |
 | `EXPORTER_PORT` | `9100` | HTTP port exposed by `metrics-exporter` |

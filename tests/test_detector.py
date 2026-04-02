@@ -121,6 +121,8 @@ def test_async_yolo_detector_processes_latest_result_and_handles_errors(monkeypa
     assert annotated_2["detections"][0]["label"] == "dog"
     assert found_2 is True
     assert detections_2[0]["label"] == "dog"
+    # Inference time must be set to a non-negative value after first result arrives
+    assert async_detector.last_inference_ms >= 0.0
 
     async_detector._future = _FakeFuture(error=RuntimeError("boom"))
     async_detector._collect_result()
@@ -129,3 +131,16 @@ def test_async_yolo_detector_processes_latest_result_and_handles_errors(monkeypa
 
     async_detector.close()
     assert async_detector._executor.shutdown_calls == [(False, True)]
+
+
+def test_async_yolo_detector_last_inference_ms_starts_at_zero() -> None:
+    class _StubDetector:
+        def detect(self, frame):
+            return []
+
+        def annotate(self, frame, detections):
+            return frame
+
+    async_det = detector.AsyncYoloDetector(_StubDetector())
+    assert async_det.last_inference_ms == 0.0
+    async_det.close()
