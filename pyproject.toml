@@ -15,6 +15,9 @@ dependencies = [
     "streamlit>=1.55.0",
     # System health monitoring
     "psutil>=5.9.0",
+    # Standalone Prometheus metrics exporter
+    "prometheus-client>=0.20.0",
+    "requests>=2.31.0",
     # Docker service monitoring (requires /var/run/docker.sock mount)
     "docker>=7.0.0",
     # OpenTelemetry — metrics and distributed traces

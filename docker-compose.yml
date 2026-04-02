@@ -35,6 +35,34 @@ services:
       - otel-collector
 
   # ---------------------------------------------------------------------------
+  # Metrics exporter — standalone Prometheus exporter that runs independently
+  # of the Streamlit dashboard.  Collects hardware metrics (CPU, memory, disk,
+  # temperature, PMIC) plus app counters and SQLite log statistics every 15 s.
+  # Prometheus scrapes this service directly on port 9100.
+  # ---------------------------------------------------------------------------
+  metrics-exporter:
+    build: .
+    restart: unless-stopped
+    command: python -m src.exporter
+    ports:
+      - "9100:9100"
+    devices:
+      - "/dev/vcio:/dev/vcio"
+    volumes:
+      - ./assets:/assets
+      - /usr/bin/vcgencmd:/usr/bin/vcgencmd:ro
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+      - ASSETS_DIR=/assets
+      - NIGHT_WATCHER_URL=http://night-watcher:8000
+      - COLLECT_INTERVAL=15
+      - EXPORTER_PORT=9100
+    depends_on:
+      - night-watcher
+
+  # ---------------------------------------------------------------------------
   # OpenTelemetry Collector — receives OTLP from the app, exposes Prometheus
   # scrape endpoint on :9464, writes trace/log data to stdout for debugging.
   # ---------------------------------------------------------------------------
