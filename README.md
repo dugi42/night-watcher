@@ -55,64 +55,64 @@ the Raspberry Pi, no local client required:
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  Raspberry Pi (Docker host)                                               │
-│                                                                           │
+│  Raspberry Pi (Docker host)                                              │
+│                                                                          │
 │  ┌──────────────────────────────────────────┐                            │
-│  │  night-watcher  :8000  (FastAPI)          │                            │
-│  │                                           │                            │
+│  │  night-watcher  :8000  (FastAPI)         │                            │
+│  │                                          │                            │
 │  │  ┌──────────┐  ┌──────────┐              │                            │
 │  │  │ camera   │→ │ detector │              │                            │
 │  │  │ (V4L2)   │  │ (YOLO11n)│              │                            │
 │  │  └──────────┘  └────┬─────┘              │                            │
-│  │                     │ detections          │                            │
+│  │                     │ detections         │                            │
 │  │               ┌─────▼──────┐             │                            │
 │  │               │  tracker   │→ callbacks  │                            │
 │  │               └────────────┘      │      │                            │
-│  │  /assets/video/*.mp4    ┌─────────▼──┐  │                            │
-│  │  /assets/meta/          │  recorder  │  │                            │
-│  │    detections.json      └────────────┘  │                            │
-│  │  /assets/logs/app.db                    │                            │
-│  │                          ┌───────────┐  │                            │
-│  │  Emits OTLP traces  ───→ │ telemetry │  │                            │
-│  │                          └───────────┘  │                            │
+│  │  /assets/video/*.mp4    ┌─────────▼──┐   │                            │
+│  │  /assets/meta/          │  recorder  │   │                            │
+│  │    detections.json      └────────────┘   │                            │
+│  │  /assets/logs/app.db                     │                            │
+│  │                          ┌───────────┐   │                            │
+│  │  Emits OTLP traces  ───→ │ telemetry │   │                            │
+│  │                          └───────────┘   │                            │
 │  └──────────────────────────────────────────┘                            │
-│            │ HTTP /metrics/app                                             │
-│            │ shared SQLite (volume)                                        │
-│            ▼                                                               │
-│  ┌───────────────────────────┐                                            │
-│  │  metrics-exporter  :9100  │                                            │
-│  │  polls every 15s:         │                                            │
-│  │  • psutil (CPU/mem/disk)  │  → absolute + relative per metric          │
-│  │  • vcgencmd (PMIC rails)  │                                            │
-│  │  • /metrics/app  (HTTP)   │                                            │
-│  │  • SQLite log counts      │                                            │
-│  └───────────────────────────┘                                            │
-│                                                                           │
+│            │ HTTP /metrics/app                                           │
+│            │ shared SQLite (volume)                                      │
+│            ▼                                                             │
+│  ┌───────────────────────────┐                                           │
+│  │  metrics-exporter  :9100  │                                           │
+│  │  polls every 15s:         │                                           │
+│  │  • psutil (CPU/mem/disk)  │  → absolute + relative per metric         │
+│  │  • vcgencmd (PMIC rails)  │                                           │
+│  │  • /metrics/app  (HTTP)   │                                           │
+│  │  • SQLite log counts      │                                           │
+│  └───────────────────────────┘                                           │
+│                                                                          │
 │  ┌───────────────────────────┐   ┌─────────────────────────────┐         │
-│  │  otel-collector           │   │  prometheus  :9090           │         │
-│  │  :4317 gRPC               │   │                              │         │
-│  │  :4318 HTTP               │   │  scrapes:                    │         │
-│  │  :9464 /metrics           │◄──│  • metrics-exporter:9100     │         │
-│  │                           │   │  • otel-collector:9464       │         │
-│  └───────────────────────────┘   │  retention: 30d              │         │
+│  │  otel-collector           │   │  prometheus  :9090          │         │
+│  │  :4317 gRPC               │   │                             │         │
+│  │  :4318 HTTP               │   │  scrapes:                   │         │
+│  │  :9464 /metrics           │◄──│  • metrics-exporter:9100    │         │
+│  │                           │   │  • otel-collector:9464      │         │
+│  └───────────────────────────┘   │  retention: 30d             │         │
 │                                  └──────────────┬──────────────┘         │
-│                                                 │                         │
-│  ┌──────────────────────────────┐   ┌──────────▼──────────────┐         │
+│                                                 │                        │
+│  ┌──────────────────────────────┐   ┌──────────▼────────-──────┐         │
 │  │  dashboard  :8501            │   │  grafana  :3000          │         │
 │  │  (Streamlit)                 │   │                          │         │
 │  │                              │   │  datasource: Prometheus  │         │
 │  │  • queries night-watcher API │   │  (auto-provisioned)      │         │
 │  │  • serves MJPEG / video via  │   └──────────────────────────┘         │
-│  │    raspberrypi.local hostname│                                         │
-│  │  • links to Grafana :3000    │                                         │
-│  └──────────────────────────────┘                                         │
+│  │    raspberrypi.local hostname│                                        │
+│  │  • links to Grafana :3000    │                                        │
+│  └──────────────────────────────┘                                        │
 └──────────────────────────────────────────────────────────────────────────┘
                     ▲                              ▲
                     │ HTTP :8501 (LAN)             │ HTTP :3000 (LAN)
                     │                              │
               ┌─────┴──────────────────────────────┴──┐
-              │         Browser (any device on LAN)    │
-              └────────────────────────────────────────┘
+              │        Browser (any device on LAN)    │
+              └───────────────────────────────────────┘
 ```
 
 The **Pi service** (`src/service.py`) runs inside Docker:
