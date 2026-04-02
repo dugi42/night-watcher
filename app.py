@@ -20,6 +20,7 @@ Usage (docker compose, see docker-compose.yml):
 
 import logging
 import os
+from urllib.parse import urlparse
 from collections import Counter
 from datetime import datetime, time as dt_time
 from typing import Any
@@ -36,6 +37,19 @@ DEFAULT_PROM_URL = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
 DEFAULT_GRAFANA_URL = os.getenv("GRAFANA_URL", "http://raspberrypi.local:3000")
 
 logger = logging.getLogger("night_watcher.client")
+
+
+def _normalize_browser_url(value: str) -> str:
+    """Return a browser-safe absolute URL for external links and embeds."""
+    url = value.strip()
+    if not url:
+        return ""
+
+    parsed = urlparse(url)
+    if not parsed.scheme:
+        url = f"http://{url}"
+
+    return url.rstrip("/")
 
 
 def _post(path: str, base_url: str, payload: dict[str, Any], timeout: float = 3.0) -> requests.Response | None:
@@ -216,7 +230,11 @@ def _render_sidebar() -> tuple[str, str, str]:
 
                 st.rerun()
 
-    return url.rstrip("/"), prom_url.rstrip("/"), grafana_url.rstrip("/")
+    return (
+        _normalize_browser_url(url),
+        _normalize_browser_url(prom_url),
+        _normalize_browser_url(grafana_url),
+    )
 
 
 def _render_stream_tab(url: str) -> None:
@@ -463,10 +481,11 @@ def _render_health_tab(url: str, prom_url: str, grafana_url: str) -> None:
     """
     if grafana_url:
         st.info(
-            f"For historical time-series analysis and dashboards, open "
-            f"**[Grafana → {grafana_url}]({grafana_url})**",
+            "For historical time-series analysis and dashboards, open Grafana.",
             icon="📈",
         )
+        st.link_button("Open Grafana", grafana_url, use_container_width=True)
+        st.caption(grafana_url)
 
     @st.fragment(run_every=10)
     def _power_status() -> None:
