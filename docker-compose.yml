@@ -126,7 +126,7 @@ services:
 
   # ---------------------------------------------------------------------------
   # Grafana — dashboards and alerting on top of Prometheus.
-  # Dashboard: http://<pi-host>:3000  (anonymous edit access enabled)
+  # Dashboard: http://<pi-host>:3000  (anonymous read access enabled)
   # Default admin credentials: admin / nightwatcher
   # ---------------------------------------------------------------------------
   grafana:
@@ -136,11 +136,10 @@ services:
       - "3000:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=nightwatcher
-      # Allow dashboard editing without login on the local network so the
-      # Streamlit dashboard can link directly to panels and operators can
-      # build dashboards immediately after deployment.
+      # Allow read-only access without login so the Streamlit dashboard can
+      # link directly to panels. Use the admin account for dashboard edits.
       - GF_AUTH_ANONYMOUS_ENABLED=true
-      - GF_AUTH_ANONYMOUS_ORG_ROLE=Editor
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
     volumes:
       # Auto-provision the Prometheus datasource on first start
       - ./grafana/provisioning:/etc/grafana/provisioning:ro

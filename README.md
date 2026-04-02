@@ -356,8 +356,8 @@ manual setup required.
 
 Access the dashboard at `http://<your-pi-hostname>:3000`.
 Default credentials: `admin` / `nightwatcher`.
-Anonymous editor access is enabled so you can build dashboards immediately and
-the Streamlit dashboard can still link directly to panels.
+Anonymous read-only access is enabled so the Streamlit dashboard can link
+directly to panels. Sign in as `admin` to create or save dashboards.
 
 ### Prometheus
 
