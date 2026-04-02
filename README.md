@@ -21,23 +21,25 @@ in a web dashboard.
 
 ---
 
-## Stable Release 1.1.0
+## Stable Release 1.2.0
 
-Night Watcher `1.1.0` builds on the foundation of v1.0 with improved
-observability and a cleaner frontend:
+Night Watcher `1.2.0` completes the Pi-side stack — everything now runs on
+the Raspberry Pi, no local client required:
 
 - Real-time YOLO11n detection for people and animals.
 - Session-based annotated video recording with persistent metadata storage.
-- A Streamlit dashboard for live video, detections, and system health KPIs.
+- **Streamlit dashboard runs as a Docker service on the Pi** (port 8501) — open
+  it in any browser on your LAN, no local installation needed.
 - **Grafana** instance with Prometheus as the pre-configured datasource — all
-  metrics are accessible as time-series dashboards out of the box.
-- Every resource metric now ships both a percentage *and* an absolute value
+  metrics are available as time-series dashboards out of the box (port 3000).
+- Every resource metric ships both a percentage *and* an absolute value
   (e.g. `disk_used_gb` + `disk_free_gb` + `disk_total_gb`).
 - YOLO inference time is measured inside the background worker thread so
   `avg_processing_ms` reflects actual model latency, not camera I/O.
 - OpenTelemetry and Prometheus observability for runtime, thermal, and power metrics.
-- A standalone `metrics-exporter` service that records hardware and app metrics independently of the dashboard — temperature history never resets on Streamlit restart.
-- Docker Compose deployment for repeatable operation on the Raspberry Pi.
+- A standalone `metrics-exporter` service that records hardware and app metrics
+  independently of the dashboard — metrics persist across restarts.
+- Docker Compose deployment for repeatable, self-contained operation.
 
 ---
 
@@ -52,73 +54,65 @@ observability and a cleaner frontend:
 ## Architecture
 
 ```text
-┌─────────────────────────────────────────────────────────────────────┐
-│  Raspberry Pi (Docker host)                                          │
-│                                                                      │
-│  ┌──────────────────────────────────────────┐                       │
-│  │  night-watcher  :8000  (FastAPI)          │                       │
-│  │                                           │                       │
-│  │  ┌──────────┐  ┌──────────┐              │                       │
-│  │  │ camera   │→ │ detector │              │                       │
-│  │  │ (V4L2)   │  │ (YOLO11n)│              │                       │
-│  │  └──────────┘  └────┬─────┘              │                       │
-│  │                     │ detections          │                       │
-│  │               ┌─────▼──────┐             │                       │
-│  │               │  tracker   │→ callbacks  │                       │
-│  │               └────────────┘      │      │                       │
-│  │  /assets/video/*.mp4    ┌─────────▼──┐  │                       │
-│  │  /assets/meta/          │  recorder  │  │                       │
-│  │    detections.json      └────────────┘  │                       │
-│  │  /assets/logs/app.db                    │                       │
-│  │                          ┌───────────┐  │                       │
-│  │  Emits OTLP traces  ───→ │ telemetry │  │                       │
-│  │                          └───────────┘  │                       │
-│  └──────────────────────────────────────────┘                       │
-│            │ HTTP /metrics/app                                        │
-│            │ shared SQLite (volume)                                   │
-│            ▼                                                          │
-│  ┌───────────────────────────┐                                       │
-│  │  metrics-exporter  :9100  │  (standalone Python process)          │
-│  │                           │                                       │
-│  │  polls every 15s:         │                                       │
-│  │  • psutil (CPU/mem/disk)  │  → absolute + relative per metric     │
-│  │  • vcgencmd (PMIC rails)  │                                       │
-│  │  • /metrics/app  (HTTP)   │                                       │
-│  │  • SQLite log counts      │                                       │
-│  │                           │                                       │
-│  │  → exposes /metrics       │                                       │
-│  └───────────────────────────┘                                       │
-│                                                                      │
-│  ┌───────────────────────────┐   ┌─────────────────────────────┐    │
-│  │  otel-collector           │   │  prometheus  :9090           │    │
-│  │  :4317 gRPC               │   │                              │    │
-│  │  :4318 HTTP               │   │  scrapes:                    │    │
-│  │  :9464 /metrics           │◄──│  • metrics-exporter:9100     │    │
-│  │                           │   │  • otel-collector:9464       │    │
-│  │  ← traces from service    │   │                              │    │
-│  └───────────────────────────┘   │  retention: 30d              │    │
-│                                  └──────────────┬──────────────┘    │
-│                                                 │ scrape             │
-│                                  ┌──────────────▼──────────────┐    │
-│                                  │  grafana  :3000              │    │
-│                                  │                              │    │
-│                                  │  datasource: Prometheus      │    │
-│                                  │  (auto-provisioned)          │    │
-│                                  └─────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────────┘
-                              ▲
-                              │ HTTP (LAN)
-                              │
-              ┌───────────────────────────────┐
-              │  app.py  (Streamlit, local)   │
-              │                               │
-              │  • /frame, /stream  (MJPEG)   │
-              │  • /status, /detections       │
-              │  • /health/**  (live KPIs)    │
-              │  • /detection/config          │
-              │  • /video/{uuid}  (playback)  │
-              │  • links to Grafana :3000     │
-              └───────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│  Raspberry Pi (Docker host)                                               │
+│                                                                           │
+│  ┌──────────────────────────────────────────┐                            │
+│  │  night-watcher  :8000  (FastAPI)          │                            │
+│  │                                           │                            │
+│  │  ┌──────────┐  ┌──────────┐              │                            │
+│  │  │ camera   │→ │ detector │              │                            │
+│  │  │ (V4L2)   │  │ (YOLO11n)│              │                            │
+│  │  └──────────┘  └────┬─────┘              │                            │
+│  │                     │ detections          │                            │
+│  │               ┌─────▼──────┐             │                            │
+│  │               │  tracker   │→ callbacks  │                            │
+│  │               └────────────┘      │      │                            │
+│  │  /assets/video/*.mp4    ┌─────────▼──┐  │                            │
+│  │  /assets/meta/          │  recorder  │  │                            │
+│  │    detections.json      └────────────┘  │                            │
+│  │  /assets/logs/app.db                    │                            │
+│  │                          ┌───────────┐  │                            │
+│  │  Emits OTLP traces  ───→ │ telemetry │  │                            │
+│  │                          └───────────┘  │                            │
+│  └──────────────────────────────────────────┘                            │
+│            │ HTTP /metrics/app                                             │
+│            │ shared SQLite (volume)                                        │
+│            ▼                                                               │
+│  ┌───────────────────────────┐                                            │
+│  │  metrics-exporter  :9100  │                                            │
+│  │  polls every 15s:         │                                            │
+│  │  • psutil (CPU/mem/disk)  │  → absolute + relative per metric          │
+│  │  • vcgencmd (PMIC rails)  │                                            │
+│  │  • /metrics/app  (HTTP)   │                                            │
+│  │  • SQLite log counts      │                                            │
+│  └───────────────────────────┘                                            │
+│                                                                           │
+│  ┌───────────────────────────┐   ┌─────────────────────────────┐         │
+│  │  otel-collector           │   │  prometheus  :9090           │         │
+│  │  :4317 gRPC               │   │                              │         │
+│  │  :4318 HTTP               │   │  scrapes:                    │         │
+│  │  :9464 /metrics           │◄──│  • metrics-exporter:9100     │         │
+│  │                           │   │  • otel-collector:9464       │         │
+│  └───────────────────────────┘   │  retention: 30d              │         │
+│                                  └──────────────┬──────────────┘         │
+│                                                 │                         │
+│  ┌──────────────────────────────┐   ┌──────────▼──────────────┐         │
+│  │  dashboard  :8501            │   │  grafana  :3000          │         │
+│  │  (Streamlit)                 │   │                          │         │
+│  │                              │   │  datasource: Prometheus  │         │
+│  │  • queries night-watcher API │   │  (auto-provisioned)      │         │
+│  │  • serves MJPEG / video via  │   └──────────────────────────┘         │
+│  │    raspberrypi.local hostname│                                         │
+│  │  • links to Grafana :3000    │                                         │
+│  └──────────────────────────────┘                                         │
+└──────────────────────────────────────────────────────────────────────────┘
+                    ▲                              ▲
+                    │ HTTP :8501 (LAN)             │ HTTP :3000 (LAN)
+                    │                              │
+              ┌─────┴──────────────────────────────┴──┐
+              │         Browser (any device on LAN)    │
+              └────────────────────────────────────────┘
 ```
 
 The **Pi service** (`src/service.py`) runs inside Docker:
@@ -142,8 +136,11 @@ so time-series data (including CPU temperature) persists across dashboard restar
 - Queries the SQLite log database for log counts by level and recent error rate.
 - Exposes a standard Prometheus `/metrics` endpoint on port **9100**.
 
-The **Streamlit client** (`app.py`) runs on your local machine. It requires
-no camera or GPU and connects to the Pi over the network.
+The **Streamlit dashboard** (`app.py`) runs as a Docker service on the Pi
+(port 8501). It connects to the other services via Docker-internal hostnames
+for server-side API calls; the MJPEG stream and video playback URLs use the
+Pi's mDNS hostname (`raspberrypi.local`) so they are reachable directly from
+the user's browser without any proxying.
 
 ---
 
@@ -163,7 +160,7 @@ cd night-watcher
 docker compose up --build -d
 ```
 
-This starts five services:
+This starts six services:
 
 | Service | Port(s) | Purpose |
 | --- | --- | --- |
@@ -172,20 +169,30 @@ This starts five services:
 | `otel-collector` | `4317` (gRPC), `4318` (HTTP), `9464` (Prometheus scrape) | Receives OTLP, exposes metrics |
 | `prometheus` | `9090` | Scrapes and stores time-series metrics (30-day retention) |
 | `grafana` | `3000` | Dashboards — Prometheus pre-configured as default datasource |
+| `dashboard` | `8501` | Streamlit dashboard — live stream, statistics, health KPIs |
 
 On first build the YOLO11n weights are downloaded and baked into the image.
 
-### 3. Check logs
+### 3. Open the dashboard
+
+```text
+http://<your-pi-hostname>:8501
+```
+
+No local installation required — the dashboard runs on the Pi and is accessible
+from any browser on the same LAN.
+
+### 4. Check logs
 
 ```bash
 # Application logs
 docker compose logs -f night-watcher
 
-# OTel Collector events
-docker compose logs -f otel-collector
+# Dashboard logs
+docker compose logs -f dashboard
 ```
 
-### 4. Prometheus UI
+### 5. Prometheus UI
 
 Open `http://<your-pi-hostname>:9090` to query metrics directly.
 
@@ -206,42 +213,12 @@ assets/
 
 ---
 
-## Client Setup (your laptop)
-
-### Install client dependencies
-
-```bash
-# With uv (recommended)
-uv sync --group client
-
-# Or with pip
-pip install streamlit requests pandas
-```
-
-### Run the dashboard
-
-```bash
-# Default — connects to raspberrypi.local:8000 (override via RASPI_URL)
-streamlit run app.py
-
-# Custom Pi address
-RASPI_URL=http://<your-pi-ip>:8000 streamlit run app.py
-
-# Custom Prometheus address (for historical charts in the Health tab)
-PROMETHEUS_URL=http://<your-pi-ip>:9090 streamlit run app.py
-```
-
-Open `http://localhost:8501` in your browser.
-
----
-
 ## Dashboard Tabs
 
 ### 📷 Live Stream
 
 - Live MJPEG feed with a `HH:MM:SS` timestamp burned into every frame.
 - **⛶ Full Screen** button — opens the raw stream in a new browser tab.
-- **Last Frame** metric shows the exact capture time and age in milliseconds.
 - Detection status: active/paused, detected classes, session ID.
 
 ### 📊 Statistics
@@ -446,9 +423,9 @@ and input voltage.  Results are injected into `docs/RUN_REPORTS.md`.
 | `YOLO_MODEL_PATH` | `/app/models/yolo11n.pt` | YOLO model weights path |
 | `ASSETS_DIR` | `/assets` | Root for video, metadata, and logs |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://otel-collector:4318` | OTel Collector HTTP endpoint |
-| `RASPI_URL` | `http://raspberrypi.local:8000` | Pi service URL (client-side only) |
-| `PROMETHEUS_URL` | `http://raspberrypi.local:9090` | Prometheus URL (shown in sidebar, used by Grafana) |
-| `GRAFANA_URL` | `http://raspberrypi.local:3000` | Grafana URL linked from the Health tab (client-side only) |
+| `RASPI_URL` | `http://raspberrypi.local:8000` | FastAPI service URL — must use the Pi's public hostname so the MJPEG stream and video embeds work in the browser (`dashboard` service) |
+| `PROMETHEUS_URL` | `http://prometheus:9090` | Prometheus URL — Docker-internal hostname used for server-side API calls (`dashboard` service) |
+| `GRAFANA_URL` | `http://raspberrypi.local:3000` | Grafana URL linked from the Health tab — must use the Pi's public hostname so the link opens in the browser (`dashboard` service) |
 | `NIGHT_WATCHER_URL` | `http://night-watcher:8000` | FastAPI URL polled by `metrics-exporter` |
 | `COLLECT_INTERVAL` | `15` | Scrape interval in seconds for `metrics-exporter` |
 | `EXPORTER_PORT` | `9100` | HTTP port exposed by `metrics-exporter` |

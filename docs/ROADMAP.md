@@ -4,6 +4,28 @@ Versioned release plan.  Each release is a stable tag on `main`.
 
 ---
 
+## v1.2 — Fully Pi-Side Stack ✅ Released
+
+> Code-only.  No hardware changes required.
+
+### Dashboard microservice
+
+| Change | File | Why |
+| --- | --- | --- |
+| Move Streamlit dashboard from local client to Docker service on the Pi (port 8501) | `docker-compose.yml`, `app.py` | Eliminates local installation — any browser on the LAN can open the dashboard |
+| RASPI_URL / GRAFANA_URL use Pi's mDNS hostname; PROMETHEUS_URL uses Docker-internal hostname | `docker-compose.yml`, `app.py` | Browser-embedded content (MJPEG stream, video, Grafana links) must resolve to the Pi's public address; Prometheus queries are server-side and can use the Docker internal network |
+| Remove `client` dependency group from pyproject.toml | `pyproject.toml` | All dashboard dependencies are now in the main group; no split needed |
+| Remove `--no-group client` flag from Dockerfile | `Dockerfile` | Matches pyproject.toml change; single install step |
+| Bump project version to 1.2.0 | `pyproject.toml` | Reflects new deployment model |
+
+### Tests
+
+| Change | File | Why |
+| --- | --- | --- |
+| Expand test_health.py from 3 to 20 tests | `tests/test_health.py` | `get_system_health`, `_read_temperature`, `get_docker_services`, and all error paths (FileNotFoundError, TimeoutExpired, empty output) were uncovered |
+
+---
+
 ## v1.1 — Observability & Frontend Cleanup ✅ Released
 
 > Code-only.  No hardware changes required.
@@ -133,4 +155,4 @@ Versioned release plan.  Each release is a stable tag on `main`.
 
 - **Photo documentation of the mechanical build** — see [`BUILD.md`](BUILD.md).
 - **Multi-camera support** — generalize `src/service.py` to manage a pool of camera devices, each with its own detection loop and `/stream/{device_id}` endpoint.
-- **Detection pipeline performance** — background video writing, async session JSON persistence, adaptive sleep in capture loop (v1.1 roadmap items carried forward).
+- **Detection pipeline performance** — background video writing, async session JSON persistence, adaptive sleep in capture loop.
