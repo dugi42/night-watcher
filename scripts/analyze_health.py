@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Night Watcher — long-term health data analysis and README report generator.
+"""Night Watcher — long-term health data analysis and run-report generator.
 
 Queries Prometheus for historical health metrics, computes summary statistics,
-detects notable events (under-voltage, high temperature, CPU throttling), and
-injects a structured report into README.md between the markers:
+detects notable events (under-voltage, high temperature, CPU throttling),
+generates Mermaid time-series charts, and injects the full report into
+``docs/RUN_REPORTS.md`` between the markers:
 
     <!-- HEALTH-REPORT-START -->
     <!-- HEALTH-REPORT-END -->
@@ -18,13 +19,14 @@ Dependencies are managed by uv (already covered by ``uv sync``):
 
 Usage
 -----
-    # Default: query http://raspberrypi.local:9090, last 7 days, write README.md
+    # Default: query http://raspberrypi.local:9090, last 7 days,
+    #          write docs/RUN_REPORTS.md
     uv run scripts/analyze_health.py
 
     # Custom Prometheus and window
     uv run scripts/analyze_health.py --prometheus http://192.168.1.50:9090 --days 3
 
-    # Print report to stdout only (do not modify README)
+    # Print report to stdout only (do not modify any files)
     uv run scripts/analyze_health.py --no-write
 
     # Write to a different file
@@ -49,22 +51,40 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 PROMETHEUS_DEFAULT = "http://raspberrypi.local:9090"
-README_DEFAULT = Path(__file__).parent.parent / "README.md"
+REPORT_DEFAULT = Path(__file__).parent.parent / "docs" / "RUN_REPORTS.md"
 REPORT_START = "<!-- HEALTH-REPORT-START -->"
 REPORT_END = "<!-- HEALTH-REPORT-END -->"
 
 # Metric name → (prometheus_query, display_label, unit_suffix, decimal_places)
-# Queries use the namespace applied by the otel-collector prometheus exporter.
+# Primary names match the standalone metrics-exporter (src/exporter.py, v1.1+).
 METRICS: dict[str, tuple[str, str, str, int]] = {
-    "cpu":       ("night_watcher_system_cpu_percent",          "CPU utilization",       "%",  1),
-    "memory":    ("night_watcher_system_memory_percent",       "RAM utilization",       "%",  1),
-    "disk":      ("night_watcher_system_disk_percent",         "Disk utilization",      "%",  1),
-    "temp":      ("night_watcher_system_temperature_c",        "CPU temperature",       "°C", 1),
-    "ext5v":     ("night_watcher_pmic_ext5v_v",                "Input voltage (EXT5V)", "V",  3),
-    "power":     ("night_watcher_pmic_total_power_w",          "System power",          "W",  2),
-    "core_v":    ('night_watcher_pmic_rail_voltage_v{rail="VDD_CORE"}', "CPU core voltage", "V", 3),
-    "core_a":    ('night_watcher_pmic_rail_current_a{rail="VDD_CORE"}', "CPU core current", "A", 3),
+    "cpu":    ("night_watcher_hw_cpu_percent",     "CPU utilization",       "%",  1),
+    "memory": ("night_watcher_hw_memory_percent",  "RAM utilization",       "%",  1),
+    "disk":   ("night_watcher_hw_disk_percent",    "Disk utilization",      "%",  1),
+    "temp":   ("night_watcher_hw_temperature_c",   "CPU temperature",       "°C", 1),
+    "ext5v":  ("night_watcher_pmic_ext5v_v",       "Input voltage (EXT5V)", "V",  3),
+    "power":  ("night_watcher_pmic_total_power_w", "System power",          "W",  2),
+    "core_v": ('night_watcher_pmic_rail_voltage_v{rail="VDD_CORE"}',
+               "CPU core voltage", "V", 3),
+    "core_a": ('night_watcher_pmic_rail_current_a{rail="VDD_CORE"}',
+               "CPU core current", "A", 3),
 }
+
+# Legacy OTel metric names (pre-v1.1, emitted by the OTel SDK via telemetry.py).
+# Tried as a second fallback when the primary name returns no data.
+_LEGACY_QUERIES: dict[str, str] = {
+    "cpu":    "night_watcher_system_cpu_percent",
+    "memory": "night_watcher_system_memory_percent",
+    "disk":   "night_watcher_system_disk_percent",
+    "temp":   "night_watcher_system_temperature_c",
+}
+
+# Unit suffixes the OTel Collector prometheus exporter may append when
+# add_metric_suffixes is true (the default in recent collector versions).
+_UNIT_SUFFIXES = ("_celsius", "_volts", "_watts", "_amperes", "_ratio")
+
+# Number of data points per Mermaid chart (keep low; xychart-beta is slow beyond ~30)
+_CHART_POINTS = 20
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +118,6 @@ def query_range(
         results = data.get("data", {}).get("result", [])
         if not results:
             return []
-        # Take the first time series (handles label-selector queries returning one series)
         return [float(v[1]) for v in results[0]["values"] if v[1] not in ("NaN", "+Inf", "-Inf")]
     except requests.ConnectionError:
         print(f"  Warning: could not connect to Prometheus at {prom_url}", file=sys.stderr)
@@ -106,11 +125,6 @@ def query_range(
     except Exception as exc:
         print(f"  Warning: query failed for {query!r}: {exc}", file=sys.stderr)
         return []
-
-
-# Unit suffixes the OTel Collector prometheus exporter may append when
-# add_metric_suffixes is true (the default in recent collector versions).
-_UNIT_SUFFIXES = ("_celsius", "_volts", "_watts", "_amperes", "_ratio")
 
 
 def query_range_with_fallback(
@@ -130,7 +144,6 @@ def query_range_with_fallback(
     values = query_range(prom_url, query, start, end, step)
     if values:
         return values
-    # Split off any label selector (e.g. 'metric_name{label="val"}')
     if "{" in query:
         base, labels_part = query.split("{", 1)
         labels_part = "{" + labels_part
@@ -185,6 +198,69 @@ def fmt(v: float, unit: str, decimals: int = 1) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Chart helpers
+# ---------------------------------------------------------------------------
+
+def _downsample(values: list[float], n: int) -> list[float]:
+    """Reduce *values* to at most *n* evenly-spaced samples."""
+    if len(values) <= n:
+        return list(values)
+    step = (len(values) - 1) / (n - 1)
+    return [values[round(i * step)] for i in range(n)]
+
+
+def _make_time_labels(start: int, end: int, n: int) -> list[str]:
+    """Return *n* evenly-spaced time-label strings spanning [*start*, *end*]."""
+    span = end - start
+    labels: list[str] = []
+    for i in range(n):
+        ts = start + i * span / max(n - 1, 1)
+        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+        if span > 2 * 86400:
+            labels.append(dt.strftime("%b %d"))
+        elif span > 86400:
+            labels.append(dt.strftime("%d %H:00"))
+        else:
+            labels.append(dt.strftime("%H:%M"))
+    return labels
+
+
+def _mermaid_chart(
+    title: str,
+    values: list[float],
+    unit: str,
+    start: int,
+    end: int,
+    n: int = _CHART_POINTS,
+) -> str:
+    """Return a Mermaid ``xychart-beta`` block as a markdown fenced code string."""
+    if not values:
+        return f"*No data available for **{title}**.*"
+
+    pts = _downsample(values, n)
+    labels = _make_time_labels(start, end, len(pts))
+
+    lo = min(pts)
+    hi = max(pts)
+    spread = hi - lo if hi != lo else abs(hi) * 0.1 or 1.0
+    y_lo = math.floor(lo - spread * 0.1)
+    y_hi = math.ceil(hi + spread * 0.1)
+
+    label_str = ", ".join(f'"{lbl}"' for lbl in labels)
+    value_str = ", ".join(f"{v:.2f}" for v in pts)
+
+    return (
+        "```mermaid\n"
+        "xychart-beta\n"
+        f'    title "{title}"\n'
+        f"    x-axis [{label_str}]\n"
+        f'    y-axis "{unit}" {y_lo} --> {y_hi}\n'
+        f"    line [{value_str}]\n"
+        "```"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Report generation
 # ---------------------------------------------------------------------------
 
@@ -203,6 +279,10 @@ def generate_report(prom_url: str, days: float) -> str:
     for key, (query, label, _unit, _dec) in METRICS.items():
         print(f"  Fetching {label} …")
         v = query_range_with_fallback(prom_url, query, start, now, step)
+        # Fall back to legacy OTel metric names for data collected before v1.1
+        if not v and key in _LEGACY_QUERIES:
+            print(f"  Retrying with legacy name for {label} …", file=sys.stderr)
+            v = query_range_with_fallback(prom_url, _LEGACY_QUERIES[key], start, now, step)
         all_values[key] = v
         all_stats[key] = compute_stats(v)
 
@@ -248,7 +328,6 @@ def generate_report(prom_url: str, days: float) -> str:
     # --- Notable events ---
     lines += ["", "### Notable Events", ""]
 
-    # Under-voltage
     v5 = all_values.get("ext5v", [])
     if v5:
         uv_n = sum(1 for v in v5 if v < 4.75)
@@ -264,7 +343,6 @@ def generate_report(prom_url: str, days: float) -> str:
     else:
         lines.append("- ℹ️ Input voltage data not available (PMIC metrics not yet collected)")
 
-    # High temperature
     temps = all_values.get("temp", [])
     if temps:
         hot_n = sum(1 for t in temps if t >= 80.0)
@@ -286,7 +364,6 @@ def generate_report(prom_url: str, days: float) -> str:
     else:
         lines.append("- ℹ️ Temperature data not available")
 
-    # CPU load
     cpu_vals = all_values.get("cpu", [])
     if cpu_vals:
         s = all_stats["cpu"]
@@ -306,14 +383,11 @@ def generate_report(prom_url: str, days: float) -> str:
     else:
         lines.append("- ℹ️ CPU utilization data not available")
 
-    # Memory
     mem_vals = all_values.get("memory", [])
     if mem_vals:
         s = all_stats["memory"]
         if s["max"] < 80.0:
-            lines.append(
-                f"- ✅ **RAM healthy** — avg {s['mean']:.1f}%, peak {s['max']:.1f}%"
-            )
+            lines.append(f"- ✅ **RAM healthy** — avg {s['mean']:.1f}%, peak {s['max']:.1f}%")
         elif s["p95"] < 90.0:
             lines.append(
                 f"- 🟡 **RAM usage elevated:** avg {s['mean']:.1f}%, peak {s['max']:.1f}% "
@@ -349,7 +423,6 @@ def generate_report(prom_url: str, days: float) -> str:
                 f"Peak draw ({s['max']:.1f} W) is {pct_psu:.0f}% of the 27 W PSU "
                 f"— approaching the limit; verify you are using the official 27 W PSU."
             )
-
         core_a_vals = all_values.get("core_a", [])
         if core_a_vals:
             sa = all_stats["core_a"]
@@ -396,22 +469,39 @@ def generate_report(prom_url: str, days: float) -> str:
     else:
         lines.append("Temperature data not available.")
 
+    # --- Time-series charts ---
+    lines += ["", "### Time-Series Charts", ""]
+    lines.append("*Charts show sampled data over the reporting window.*")
+    lines.append("")
+
+    chart_specs = [
+        ("temp",  "CPU Temperature",       "°C"),
+        ("cpu",   "CPU Utilization",       "%"),
+        ("power", "System Power",          "W"),
+        ("ext5v", "Input Voltage (EXT5V)", "V"),
+    ]
+    for key, title, unit in chart_specs:
+        vals = all_values.get(key, [])
+        lines.append(f"#### {title}")
+        lines.append("")
+        lines.append(_mermaid_chart(title, vals, unit, start, now))
+        lines.append("")
+
     return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
-# README injection
+# Report injection
 # ---------------------------------------------------------------------------
 
-def inject_report(readme_path: Path, report: str) -> None:
-    """Replace the health report section in *readme_path* with *report*.
+def inject_report(report_path: Path, report: str) -> None:
+    """Replace the health report section in *report_path* with *report*.
 
     The content between ``<!-- HEALTH-REPORT-START -->`` and
     ``<!-- HEALTH-REPORT-END -->`` is replaced in-place.  If the markers are
-    absent the section is appended at the end of the file under a new
-    ``## Long-term Health Report`` heading.
+    absent the section is appended at the end of the file.
     """
-    content = readme_path.read_text(encoding="utf-8")
+    content = report_path.read_text(encoding="utf-8")
     section = f"{REPORT_START}\n{report}\n{REPORT_END}"
 
     if REPORT_START in content and REPORT_END in content:
@@ -421,13 +511,13 @@ def inject_report(readme_path: Path, report: str) -> None:
     else:
         new_content = (
             content.rstrip("\n")
-            + "\n\n---\n\n## Long-term Health Report\n\n"
+            + "\n\n---\n\n"
             + section
             + "\n"
         )
 
-    readme_path.write_text(new_content, encoding="utf-8")
-    print(f"Report written to {readme_path}")
+    report_path.write_text(new_content, encoding="utf-8")
+    print(f"Report written to {report_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -436,7 +526,7 @@ def inject_report(readme_path: Path, report: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Analyze Night Watcher health metrics from Prometheus and update README",
+        description="Analyze Night Watcher health metrics from Prometheus and update docs/RUN_REPORTS.md",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -454,9 +544,9 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=README_DEFAULT,
+        default=REPORT_DEFAULT,
         metavar="FILE",
-        help="README file to update",
+        help="Report file to update",
     )
     parser.add_argument(
         "--no-write",
