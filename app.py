@@ -22,20 +22,9 @@ import streamlit as st
 
 DEFAULT_URL = os.getenv("RASPI_URL", "http://raspberrypi.local:8000")
 DEFAULT_PROM_URL = os.getenv("PROMETHEUS_URL", "http://raspberrypi.local:9090")
+DEFAULT_GRAFANA_URL = os.getenv("GRAFANA_URL", "http://raspberrypi.local:3000")
 
 logger = logging.getLogger("night_watcher.client")
-
-# Prometheus metric names produced by the otel-collector (namespace: night_watcher)
-_PROM_CPU = "night_watcher_system_cpu_percent"
-_PROM_MEM = "night_watcher_system_memory_percent"
-_PROM_DISK = "night_watcher_system_disk_percent"
-_PROM_TEMP = "night_watcher_system_temperature_c"
-_PROM_EXT5V = "night_watcher_pmic_ext5v_v"
-_PROM_POWER = "night_watcher_pmic_total_power_w"
-_PROM_CORE_V = 'night_watcher_pmic_rail_voltage_v{rail="VDD_CORE"}'
-_PROM_CORE_A = 'night_watcher_pmic_rail_current_a{rail="VDD_CORE"}'
-
-_WINDOW_HOURS = {"15 min": 0.25, "1 hour": 1.0, "6 hours": 6.0, "24 hours": 24.0, "7 days": 168.0}
 
 
 def _post(path: str, base_url: str, payload: dict[str, Any], timeout: float = 3.0) -> requests.Response | None:
@@ -99,63 +88,9 @@ def _get(path: str, base_url: str, timeout: float = 3.0) -> requests.Response | 
         return None
 
 
-def _prom_range(
-    prom_url: str,
-    query: str,
-    hours: float,
-    column: str = "value",
-) -> pd.DataFrame | None:
-    """Query Prometheus range API; return a time-indexed single-column DataFrame.
 
-    Parameters
-    ----------
-    prom_url:
-        Prometheus base URL, e.g. ``"http://raspberrypi.local:9090"``.
-    query:
-        PromQL expression.
-    hours:
-        How many hours of history to fetch.
-    column:
-        Name to assign to the value column (default ``"value"``).
-
-    Returns
-    -------
-    pd.DataFrame | None
-        DataFrame with a ``DatetimeIndex`` and one column named *column*, or
-        ``None`` when Prometheus is unreachable or returns no data.
-    """
-    if not prom_url:
-        return None
-    import time as _t
-
-    end = int(_t.time())
-    start = int(end - hours * 3600)
-    step = max(15, int((end - start) / 300))  # ~300 data points, min 15 s
-    try:
-        resp = requests.get(
-            f"{prom_url}/api/v1/query_range",
-            params={"query": query, "start": start, "end": end, "step": step},
-            timeout=5.0,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("status") != "success":
-            return None
-        results = data.get("data", {}).get("result", [])
-        if not results:
-            return None
-        values = results[0]["values"]
-        df = pd.DataFrame(values, columns=["ts", column])
-        df.index = pd.to_datetime(df["ts"].astype(float), unit="s")
-        df[column] = pd.to_numeric(df[column], errors="coerce")
-        return df[[column]]
-    except Exception as exc:
-        logger.debug("Prometheus query failed (%s): %s", query, exc)
-        return None
-
-
-def _render_sidebar() -> tuple[str, str]:
-    """Render the sidebar and return ``(pi_url, prometheus_url)``.
+def _render_sidebar() -> tuple[str, str, str]:
+    """Render the sidebar and return ``(pi_url, prometheus_url, grafana_url)``.
 
     Displays the logo, URL inputs, connectivity indicator, and the Detection
     Control panel (enable toggle, optional time schedule, Apply button with
@@ -163,15 +98,17 @@ def _render_sidebar() -> tuple[str, str]:
 
     Returns
     -------
-    tuple[str, str]
-        ``(pi_service_url, prometheus_url)`` — both with trailing slash stripped.
+    tuple[str, str, str]
+        ``(pi_service_url, prometheus_url, grafana_url)`` — all with trailing slash stripped.
     """
     with st.sidebar:
         st.image("assets/logo.jpeg", width="stretch")
         st.title("Night Watcher")
         url = st.text_input("Pi service URL", value=DEFAULT_URL)
         prom_url = st.text_input("Prometheus URL", value=DEFAULT_PROM_URL,
-                                  help="Used for historical time-series charts in the Health tab")
+                                  help="Prometheus backend (used by Grafana for dashboards)")
+        grafana_url = st.text_input("Grafana URL", value=DEFAULT_GRAFANA_URL,
+                                     help="Grafana instance for time-series dashboards")
 
         resp = _get("/health", url, timeout=2.0)
         if resp is not None:
@@ -268,7 +205,7 @@ def _render_sidebar() -> tuple[str, str]:
 
                 st.rerun()
 
-    return url.rstrip("/"), prom_url.rstrip("/")
+    return url.rstrip("/"), prom_url.rstrip("/"), grafana_url.rstrip("/")
 
 
 def _render_stream_tab(url: str) -> None:
@@ -362,24 +299,16 @@ def _render_stream_tab(url: str) -> None:
             classes: str = ", ".join(status.get("detected_classes", [])) or "none"
             sid: str = status.get("session_id") or ""
             detection_active: bool = status.get("detection_active", True)
-            frame_age_ms: int | None = status.get("frame_age_ms")
-            captured_at: float | None = status.get("frame_captured_at")
 
             logger.debug(
                 "Status: detection_active=%s classes=%s session=%s",
                 detection_active, classes, sid,
             )
 
-            col1, col2, col3, col4 = st.columns(4)
+            col1, col2, col3 = st.columns(3)
             col1.metric("Detection", "Active" if detection_active else "Paused")
             col2.metric("Detected", classes)
             col3.metric("Session", sid[:8] + "…" if sid else "—")
-
-            if captured_at and frame_age_ms is not None:
-                frame_ts = datetime.fromtimestamp(captured_at).strftime("%H:%M:%S")
-                col4.metric("Last Frame", frame_ts, delta=f"{frame_age_ms} ms ago", delta_color="off")
-            else:
-                col4.metric("Last Frame", "—")
 
             st.caption(f"Status — HTTP {resp.status_code}")
             if not detection_active:
@@ -506,36 +435,27 @@ def _render_stats_tab(url: str) -> None:
                 st.video(video_url)
 
 
-def _render_health_tab(url: str, prom_url: str) -> None:
+def _render_health_tab(url: str, prom_url: str, grafana_url: str) -> None:
     """Render system health, Docker service status, app metrics, and logs.
 
-    Polls the Pi's health endpoints for live KPI metrics, and queries
-    Prometheus for historical time-series charts (falling back to an
-    in-memory rolling window when Prometheus is unreachable).
+    Shows live KPI metrics as numbers only. For time-series analysis and
+    historical charts, the Grafana dashboard is linked at the top of the tab.
 
     Parameters
     ----------
     url:
         Pi service base URL, e.g. ``"http://raspi.local:8000"``.
     prom_url:
-        Prometheus base URL, e.g. ``"http://raspberrypi.local:9090"``.
+        Prometheus base URL (informational, shown in sidebar).
+    grafana_url:
+        Grafana base URL, e.g. ``"http://raspberrypi.local:3000"``.
     """
-    # History window selector — shared by all time-series fragments below
-    col_hdr, col_win = st.columns([4, 1])
-    with col_hdr:
-        if prom_url:
-            st.caption(f"Prometheus: {prom_url}")
-        else:
-            st.caption("Prometheus not configured — charts use in-memory rolling window")
-    with col_win:
-        window_label = st.selectbox(
-            "History",
-            options=list(_WINDOW_HOURS.keys()),
-            index=1,
-            key="_prom_window",
-            label_visibility="collapsed",
+    if grafana_url:
+        st.info(
+            f"For historical time-series analysis and dashboards, open "
+            f"**[Grafana → {grafana_url}]({grafana_url})**",
+            icon="📈",
         )
-    hours = _WINDOW_HOURS[window_label]
 
     @st.fragment(run_every=10)
     def _power_status() -> None:
@@ -599,21 +519,6 @@ def _render_health_tab(url: str, prom_url: str) -> None:
             st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
             st.caption(f"Raw throttled value: `{p.get('throttled_raw', '?')}`")
 
-        # Time series — record each flag as 0/1; no Prometheus equivalent
-        hist = st.session_state.setdefault("_hist_power", [])
-        hist.append({
-            "Time": datetime.now().strftime("%H:%M:%S"),
-            "Under-voltage": int(bool(p.get("under_voltage_now"))),
-            "Freq capped": int(bool(p.get("freq_capped_now"))),
-            "Throttled": int(bool(p.get("throttled_now"))),
-            "Soft temp limit": int(bool(p.get("soft_temp_limit_now"))),
-        })
-        if len(hist) > 120:
-            hist.pop(0)
-        if len(hist) > 1:
-            st.write("**Throttle flags over time** (1 = active)")
-            st.line_chart(pd.DataFrame(hist).set_index("Time"))
-
     @st.fragment(run_every=5)
     def _pmic_readings() -> None:
         resp = _get("/health/pmic", url, timeout=4.0)
@@ -675,66 +580,6 @@ def _render_health_tab(url: str, prom_url: str) -> None:
                     df_rails[col] = df_rails[col].map(lambda x: f"{x:.3f}")
                 st.dataframe(df_rails, hide_index=True, width="stretch")
 
-        # Time series — try Prometheus, fall back to in-memory rolling window
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write("**Input voltage over time (V)**")
-            df_v = _prom_range(prom_url, _PROM_EXT5V, hours, column="Input 5V (V)")
-            if df_v is not None and not df_v.empty:
-                st.line_chart(df_v)
-            else:
-                hist = st.session_state.setdefault("_hist_pmic", [])
-                if ext5v is not None:
-                    entry: dict[str, Any] = {
-                        "Time": datetime.now().strftime("%H:%M:%S"),
-                        "Input 5V (V)": ext5v,
-                        "Total power (W)": total_w,
-                    }
-                    if core:
-                        entry["Core voltage (V)"] = core["voltage_v"]
-                        entry["Core current (A)"] = core["current_a"]
-                    hist.append(entry)
-                    if len(hist) > 120:
-                        hist.pop(0)
-                if len(hist) > 1:
-                    df_h = pd.DataFrame(hist).set_index("Time")
-                    if "Input 5V (V)" in df_h.columns:
-                        st.line_chart(df_h[["Input 5V (V)"]])
-
-            st.write("**Total system power over time (W)**")
-            df_p = _prom_range(prom_url, _PROM_POWER, hours, column="Total power (W)")
-            if df_p is not None and not df_p.empty:
-                st.line_chart(df_p)
-            else:
-                hist = st.session_state.get("_hist_pmic", [])
-                if len(hist) > 1:
-                    df_h = pd.DataFrame(hist).set_index("Time")
-                    if "Total power (W)" in df_h.columns:
-                        st.line_chart(df_h[["Total power (W)"]])
-
-        with col2:
-            st.write("**CPU core voltage over time (V)**")
-            df_cv = _prom_range(prom_url, _PROM_CORE_V, hours, column="Core voltage (V)")
-            if df_cv is not None and not df_cv.empty:
-                st.line_chart(df_cv)
-            else:
-                hist = st.session_state.get("_hist_pmic", [])
-                if len(hist) > 1:
-                    df_h = pd.DataFrame(hist).set_index("Time")
-                    if "Core voltage (V)" in df_h.columns:
-                        st.line_chart(df_h[["Core voltage (V)"]])
-
-            st.write("**CPU core current over time (A)**")
-            df_ca = _prom_range(prom_url, _PROM_CORE_A, hours, column="Core current (A)")
-            if df_ca is not None and not df_ca.empty:
-                st.line_chart(df_ca)
-            else:
-                hist = st.session_state.get("_hist_pmic", [])
-                if len(hist) > 1:
-                    df_h = pd.DataFrame(hist).set_index("Time")
-                    if "Core current (A)" in df_h.columns:
-                        st.line_chart(df_h[["Core current (A)"]])
-
     @st.fragment(run_every=5)
     def _system_metrics() -> None:
         resp = _get("/health/detailed", url, timeout=4.0)
@@ -790,45 +635,6 @@ def _render_health_tab(url: str, prom_url: str) -> None:
 
         st.caption(f"Uptime: {uptime_str}")
 
-        # Always keep a rolling in-memory history so charts that lack
-        # Prometheus data (e.g. temperature before the metric lands in Prom)
-        # can still display something meaningful.
-        hist = st.session_state.setdefault("_hist_system", [])
-        hist.append({
-            "Time": datetime.now().strftime("%H:%M:%S"),
-            "CPU %": cpu.get("percent", 0),
-            "Memory %": mem.get("percent", 0),
-            "Disk %": disk.get("percent", 0),
-            "Temperature °C": temp if temp is not None else 0,
-        })
-        if len(hist) > 120:
-            hist.pop(0)
-
-        # Time series — Prometheus first, in-memory fallback
-        col_ts1, col_ts2 = st.columns(2)
-        with col_ts1:
-            st.write("**CPU & Memory over time (%)**")
-            df_cpu = _prom_range(prom_url, _PROM_CPU, hours, column="CPU %")
-            df_mem = _prom_range(prom_url, _PROM_MEM, hours, column="Memory %")
-            if df_cpu is not None or df_mem is not None:
-                frames = [f for f in (df_cpu, df_mem) if f is not None]
-                st.line_chart(pd.concat(frames, axis=1))
-            else:
-                if len(hist) > 1:
-                    df_h = pd.DataFrame(hist).set_index("Time")
-                    st.line_chart(df_h[["CPU %", "Memory %"]])
-
-        with col_ts2:
-            st.write("**Temperature over time (°C)**")
-            df_temp = _prom_range(prom_url, _PROM_TEMP, hours, column="Temperature °C")
-            if df_temp is not None and not df_temp.empty:
-                st.line_chart(df_temp)
-            else:
-                hist = st.session_state.get("_hist_system", [])
-                if len(hist) > 1:
-                    df_h = pd.DataFrame(hist).set_index("Time")
-                    st.line_chart(df_h[["Temperature °C"]])
-
     @st.fragment(run_every=10)
     def _docker_services() -> None:
         st.subheader("Docker Services")
@@ -881,25 +687,6 @@ def _render_health_tab(url: str, prom_url: str) -> None:
                 columns=["Class", "Count"],
             ).set_index("Class")
             st.bar_chart(df)
-
-        # Time series — in-memory rolling window (no single Prometheus metric maps to FPS)
-        hist = st.session_state.setdefault("_hist_app", [])
-        hist.append({
-            "Time": datetime.now().strftime("%H:%M:%S"),
-            "FPS": m.get("fps_avg", 0),
-            "Frame time (ms)": m.get("avg_processing_ms", 0),
-        })
-        if len(hist) > 120:
-            hist.pop(0)
-        if len(hist) > 1:
-            df_hist = pd.DataFrame(hist).set_index("Time")
-            col_ts1, col_ts2 = st.columns(2)
-            with col_ts1:
-                st.write("**FPS over time**")
-                st.line_chart(df_hist[["FPS"]])
-            with col_ts2:
-                st.write("**Frame processing time over time (ms)**")
-                st.line_chart(df_hist[["Frame time (ms)"]])
 
     @st.fragment(run_every=10)
     def _log_viewer() -> None:
@@ -1006,7 +793,7 @@ def main() -> None:
 
     logger.info("Night Watcher client started")
 
-    url, prom_url = _render_sidebar()
+    url, prom_url, grafana_url = _render_sidebar()
 
     tab_stream, tab_stats, tab_health = st.tabs(
         ["📷 Live Stream", "📊 Statistics", "🩺 Health"]
@@ -1019,7 +806,7 @@ def main() -> None:
         _render_stats_tab(url)
 
     with tab_health:
-        _render_health_tab(url, prom_url)
+        _render_health_tab(url, prom_url, grafana_url)
 
 
 if __name__ == "__main__":
