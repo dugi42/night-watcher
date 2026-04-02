@@ -1,13 +1,21 @@
-"""Streamlit client for Night Watcher — runs on your local machine.
+"""Streamlit dashboard for Night Watcher — runs as a Docker service on the Raspberry Pi.
 
-Connects to the FastAPI detection service running on the Raspberry Pi and
-displays a live MJPEG stream alongside detection statistics, health
-monitoring, and recorded video clips.  Configure the Pi URL via the
-RASPI_URL environment variable or the sidebar input.
+Connects to the FastAPI detection service and Grafana instance running in the
+same Docker Compose stack.  All URLs default to the Pi-side Docker network and
+the Pi's mDNS hostname so that embedded streams and links are reachable from
+any browser on the same LAN.
 
-Usage
------
-    RASPI_URL=http://raspi.local:8000 streamlit run app.py
+Environment variables (set via docker-compose or shell):
+    RASPI_URL       Base URL of the FastAPI service (default: http://raspberrypi.local:8000).
+                    Must be reachable from the user's browser — used for the MJPEG stream
+                    and video playback embeds as well as server-side API calls.
+    PROMETHEUS_URL  Prometheus base URL (default: http://prometheus:9090).
+                    Server-side only (not embedded in the browser directly).
+    GRAFANA_URL     Grafana base URL (default: http://raspberrypi.local:3000).
+                    Linked from the Health tab — must be reachable from the browser.
+
+Usage (docker compose, see docker-compose.yml):
+    streamlit run app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
 """
 
 import logging
@@ -20,8 +28,11 @@ import pandas as pd
 import requests
 import streamlit as st
 
+# Default to the Pi's mDNS hostname so the MJPEG stream and video embeds work
+# from any browser on the local network, even though the dashboard itself runs
+# inside Docker on the Pi.
 DEFAULT_URL = os.getenv("RASPI_URL", "http://raspberrypi.local:8000")
-DEFAULT_PROM_URL = os.getenv("PROMETHEUS_URL", "http://raspberrypi.local:9090")
+DEFAULT_PROM_URL = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
 DEFAULT_GRAFANA_URL = os.getenv("GRAFANA_URL", "http://raspberrypi.local:3000")
 
 logger = logging.getLogger("night_watcher.client")

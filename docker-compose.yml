@@ -95,6 +95,36 @@ services:
       - "--web.enable-lifecycle"
 
   # ---------------------------------------------------------------------------
+  # Streamlit dashboard — runs on the Pi, accessible from any browser on the
+  # LAN at http://<pi-hostname>:8501.
+  #
+  # RASPI_URL and GRAFANA_URL must use the Pi's public hostname (not the Docker
+  # internal service name) because these URLs are embedded in the browser for
+  # the MJPEG stream, video playback, and Grafana links.
+  # ---------------------------------------------------------------------------
+  dashboard:
+    build: .
+    restart: unless-stopped
+    command: >
+      streamlit run app.py
+      --server.port 8501
+      --server.address 0.0.0.0
+      --server.headless true
+    ports:
+      - "8501:8501"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - RASPI_URL=http://raspberrypi.local:8000
+      - PROMETHEUS_URL=http://prometheus:9090
+      - GRAFANA_URL=http://raspberrypi.local:3000
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    depends_on:
+      - night-watcher
+      - grafana
+
+  # ---------------------------------------------------------------------------
   # Grafana — dashboards and alerting on top of Prometheus.
   # Dashboard: http://<pi-host>:3000  (anonymous read access enabled)
   # Default admin credentials: admin / nightwatcher

@@ -16,7 +16,7 @@ WORKDIR /app
 
 # Install Python dependencies first (cached unless pyproject.toml/uv.lock changes)
 COPY pyproject.toml uv.lock ./
-RUN uv sync --no-dev --no-group client --no-install-project --frozen
+RUN uv sync --no-dev --no-install-project --frozen
 
 # Use the project virtualenv for all subsequent commands
 ENV PATH="/app/.venv/bin:${PATH}"
@@ -34,7 +34,8 @@ RUN mkdir -p /tmp/Ultralytics /app/models \
 # Copy application code (after dependency install to maximise layer caching)
 COPY . .
 
-# FastAPI service port
+# FastAPI detection service port; Streamlit dashboard overrides CMD in docker-compose
 EXPOSE 8000
+EXPOSE 8501
 
 CMD ["uv", "run", "uvicorn", "src.service:app", "--host", "0.0.0.0", "--port", "8000"]
