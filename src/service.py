@@ -284,7 +284,6 @@ class DetectionLoop:
         last_conf = detector.conf_threshold
         try:
             while self._running:
-                frame_start = time.perf_counter()
                 ret, frame = read_frame(cap)
                 if not ret:
                     logger.warning("Failed to read frame; retrying")
@@ -319,7 +318,11 @@ class DetectionLoop:
 
                 was_active = detection_active
 
-                processing_ms = (time.perf_counter() - frame_start) * 1000.0
+                # Use the actual YOLO inference duration measured inside the
+                # background worker thread (set by AsyncYoloDetector after
+                # each completed inference). This excludes camera I/O and
+                # is 0.0 until the first inference result arrives.
+                processing_ms = async_detector.last_inference_ms
 
                 # Overlay live timestamp on every frame so the stream shows
                 # real-time clock — confirms the feed is actually live

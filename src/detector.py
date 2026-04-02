@@ -10,6 +10,7 @@ is silently filtered.
 
 import logging
 import threading
+import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
@@ -134,9 +135,10 @@ class AsyncYoloDetector:
     def __init__(self, detector: YoloDetector) -> None:
         self.detector = detector
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="yolo")
-        self._future: Future[list[dict[str, Any]]] | None = None
+        self._future: Future[tuple[list[dict[str, Any]], float]] | None = None
         self._latest_detections: list[dict[str, Any]] = []
         self._lock = threading.Lock()
+        self.last_inference_ms: float = 0.0
 
     def process_frame(self, frame: np.ndarray) -> tuple[np.ndarray, bool, list[dict[str, Any]]]:
         """Submit *frame* for inference and return the latest annotated result.
@@ -157,7 +159,7 @@ class AsyncYoloDetector:
         self._collect_result()
 
         if self._future is None:
-            self._future = self._executor.submit(self.detector.detect, frame.copy())
+            self._future = self._executor.submit(self._timed_detect, frame.copy())
 
         with self._lock:
             detections = list(self._latest_detections)
@@ -169,12 +171,24 @@ class AsyncYoloDetector:
         """Shut down the background executor."""
         self._executor.shutdown(wait=False, cancel_futures=True)
 
+    def _timed_detect(self, frame: np.ndarray) -> tuple[list[dict[str, Any]], float]:
+        """Run detection and return (detections, elapsed_ms).
+
+        Executed inside the background worker thread so the caller gets
+        accurate YOLO-only inference timing independent of camera I/O.
+        """
+        t0 = time.perf_counter()
+        detections = self.detector.detect(frame)
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        return detections, elapsed_ms
+
     def _collect_result(self) -> None:
         """Poll the pending future and store its result if ready."""
         if self._future is None or not self._future.done():
             return
         try:
-            detections = self._future.result()
+            detections, elapsed_ms = self._future.result()
+            self.last_inference_ms = elapsed_ms
         except Exception:
             logger.exception("Async inference failed")
             detections = []

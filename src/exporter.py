@@ -60,6 +60,14 @@ hw_memory_used_mb = Gauge(
     "night_watcher_hw_memory_used_mb",
     "RAM used (MB)",
 )
+hw_memory_total_mb = Gauge(
+    "night_watcher_hw_memory_total_mb",
+    "Total RAM installed (MB)",
+)
+hw_memory_available_mb = Gauge(
+    "night_watcher_hw_memory_available_mb",
+    "Available RAM (MB)",
+)
 hw_disk_percent = Gauge(
     "night_watcher_hw_disk_percent",
     "Disk utilization (%) on the assets volume",
@@ -67,6 +75,14 @@ hw_disk_percent = Gauge(
 hw_disk_used_gb = Gauge(
     "night_watcher_hw_disk_used_gb",
     "Disk space used (GB) on the assets volume",
+)
+hw_disk_total_gb = Gauge(
+    "night_watcher_hw_disk_total_gb",
+    "Total disk capacity (GB) on the assets volume",
+)
+hw_disk_free_gb = Gauge(
+    "night_watcher_hw_disk_free_gb",
+    "Free disk space (GB) on the assets volume",
 )
 hw_temperature_c = Gauge(
     "night_watcher_hw_temperature_c",
@@ -176,11 +192,15 @@ def collect_hardware() -> None:
     mem = psutil.virtual_memory()
     hw_memory_percent.set(mem.percent)
     hw_memory_used_mb.set(round(mem.used / 1024**2, 1))
+    hw_memory_total_mb.set(round(mem.total / 1024**2, 1))
+    hw_memory_available_mb.set(round(mem.available / 1024**2, 1))
 
     disk_path = str(_ASSETS_DIR) if _ASSETS_DIR.exists() else "/"
     disk = psutil.disk_usage(disk_path)
     hw_disk_percent.set(disk.percent)
     hw_disk_used_gb.set(round(disk.used / 1024**3, 2))
+    hw_disk_total_gb.set(round(disk.total / 1024**3, 2))
+    hw_disk_free_gb.set(round(disk.free / 1024**3, 2))
 
     temp = _read_temperature()
     if temp is not None:
