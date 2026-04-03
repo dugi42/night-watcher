@@ -21,10 +21,10 @@ in a web dashboard.
 
 ---
 
-## Stable Release 1.2.1
+## Stable Release 1.3.0
 
-Night Watcher `1.2.1` completes the Pi-side stack — everything now runs on
-the Raspberry Pi, no local client required:
+Night Watcher `1.3.0` adds log aggregation and a secure Tailscale + TLS
+remote-access layer on top of the existing Pi-side stack:
 
 - Real-time YOLO11n detection for people and animals.
 - Session-based annotated video recording with persistent metadata storage.
@@ -32,6 +32,12 @@ the Raspberry Pi, no local client required:
   it in any browser on your LAN, no local installation needed.
 - **Grafana** instance with Prometheus as the pre-configured datasource — all
   metrics are available as time-series dashboards out of the box (port 3000).
+- **Loki + Promtail** log aggregation — all container logs are shipped to Loki
+  and browsable in Grafana's Explore view, no SSH required.
+- **Tailscale VPN** — the Pi joins your Tailscale network and is reachable from
+  any device on the tailnet; the VPN issues a TLS certificate automatically.
+- **nginx TLS reverse proxy** — terminates HTTPS using the Tailscale certificate
+  and routes all services behind a single `https://<ts-host>/` endpoint.
 - Every resource metric ships both a percentage *and* an absolute value
   (e.g. `disk_used_gb` + `disk_free_gb` + `disk_total_gb`).
 - YOLO inference time is measured inside the background worker thread so
@@ -160,7 +166,7 @@ cd night-watcher
 docker compose up --build -d
 ```
 
-This starts six services:
+This starts ten services:
 
 | Service | Port(s) | Purpose |
 | --- | --- | --- |
@@ -168,21 +174,61 @@ This starts six services:
 | `metrics-exporter` | `9100` | Standalone Prometheus exporter — hardware metrics, app counters, log stats |
 | `otel-collector` | `4317` (gRPC), `4318` (HTTP), `9464` (Prometheus scrape) | Receives OTLP, exposes metrics |
 | `prometheus` | `9090` | Scrapes and stores time-series metrics (30-day retention) |
-| `grafana` | `3000` | Dashboards — Prometheus pre-configured as default datasource |
+| `grafana` | `3000` | Dashboards — Prometheus + Loki pre-configured as datasources |
+| `loki` | `3100` | Log aggregation backend |
+| `promtail` | `9080` | Ships Docker container logs to Loki |
 | `dashboard` | `8501` | Streamlit dashboard — live stream, statistics, health KPIs |
+| `tailscale` | — | VPN agent; joins tailnet and issues a TLS certificate |
+| `nginx` | `80`, `443` | TLS reverse proxy — routes all services behind HTTPS |
 
 On first build the YOLO11n weights are downloaded and baked into the image.
 
-### 3. Open the dashboard
+### 3. Configure Tailscale (remote access + TLS)
+
+Copy `.env.example` to `.env` and fill in your Tailscale auth key:
+
+```bash
+cp .env.example .env
+# edit .env and set TS_AUTHKEY and TS_HOSTNAME
+```
+
+Create an auth key at <https://login.tailscale.com/admin/settings/keys> and
+enable **HTTPS Certificates** in the Tailscale admin console under **DNS**.
+
+After the stack starts, find the FQDN with:
+
+```bash
+docker compose exec tailscale tailscale status
+```
+
+Then set `TS_FQDN` in `.env` to the reported FQDN (e.g.
+`night-watcher-pi.tail1a2b3c.ts.net`) and restart the dashboard service:
+
+```bash
+docker compose up -d dashboard
+```
+
+### 4. Open the dashboard
+
+**LAN access (plain HTTP):**
 
 ```text
 http://<your-pi-hostname>:8501
 ```
 
-No local installation required — the dashboard runs on the Pi and is accessible
-from any browser on the same LAN.
+**Remote access via Tailscale (HTTPS):**
 
-### 4. Check logs
+| URL | Service |
+| --- | --- |
+| `https://<ts-host>/` | Streamlit dashboard |
+| `https://<ts-host>/grafana/` | Grafana — metrics + logs |
+| `https://<ts-host>/api/health` | Night Watcher API |
+| `https://<ts-host>/prometheus/` | Prometheus UI |
+
+No local installation required — the dashboard runs on the Pi and is accessible
+from any browser on the same LAN or over Tailscale.
+
+### 5. Check logs
 
 ```bash
 # Application logs
@@ -192,9 +238,10 @@ docker compose logs -f night-watcher
 docker compose logs -f dashboard
 ```
 
-### 5. Prometheus UI
+### 6. Prometheus UI
 
-Open `http://<your-pi-hostname>:9090` to query metrics directly.
+Open `http://<your-pi-hostname>:9090` to query metrics directly, or
+`https://<ts-host>/prometheus/` over Tailscale.
 
 ### Persistent storage
 
@@ -350,14 +397,39 @@ provider — the application keeps running.
 ### Grafana
 
 Grafana runs on port **3000** and is the recommended tool for time-series
-dashboards. Prometheus is automatically configured as the default datasource
-on startup via `grafana/provisioning/datasources/prometheus.yml` — no
-manual setup required.
+dashboards. Both **Prometheus** and **Loki** are automatically provisioned as
+datasources on startup — no manual setup required.
 
-Access the dashboard at `http://<your-pi-hostname>:3000`.
+Access the dashboard at `http://<your-pi-hostname>:3000` (LAN) or
+`https://<ts-host>/grafana/` (Tailscale).
 Default credentials: `admin` / `nightwatcher`.
-Anonymous read-only access is enabled so the Streamlit dashboard can link
-directly to panels. Sign in as `admin` to create or save dashboards.
+Sign in as `admin` to create or save dashboards.
+
+### Loki + Log Analysis
+
+**Loki** (`loki:3100`) is a log aggregation backend.  **Promtail** runs as a
+sidecar and ships the stdout/stderr of every container in the stack to Loki,
+labelled by `container` and `service`.
+
+To explore logs in Grafana:
+
+1. Open Grafana → **Explore** (compass icon).
+2. Select the **Loki** datasource.
+3. Use a label selector such as `{service="night-watcher"}` to see app logs,
+   or `{container="night-watcher-grafana-1"}` for a specific container.
+
+Example LogQL queries:
+
+```logql
+# All ERROR-level lines from the detection service
+{service="night-watcher"} |= "ERROR"
+
+# Detections logged in the last hour
+{service="night-watcher"} |= "detection"
+
+# All logs from any night-watcher container
+{container=~"night-watcher.*"}
+```
 
 ### Prometheus
 
@@ -426,6 +498,9 @@ and input voltage.  Results are injected into `docs/RUN_REPORTS.md`.
 | `RASPI_URL` | `http://raspberrypi.local:8000` | FastAPI service URL — must use the Pi's public hostname so the MJPEG stream and video embeds work in the browser (`dashboard` service) |
 | `PROMETHEUS_URL` | `http://prometheus:9090` | Prometheus URL — Docker-internal hostname used for server-side API calls (`dashboard` service) |
 | `GRAFANA_URL` | `http://raspberrypi.local:3000` | Grafana URL linked from the Health tab — must use the Pi's public hostname so the link opens in the browser (`dashboard` service) |
+| `TS_FQDN` | — | Tailscale FQDN (e.g. `night-watcher-pi.tail1a2b3c.ts.net`). Set in `.env` after Tailscale connects. Used to build `PUBLIC_RASPI_URL` and `GRAFANA_URL` for HTTPS access |
+| `TS_AUTHKEY` | — | Tailscale auth key for the VPN agent. Create at <https://login.tailscale.com/admin/settings/keys>. Set in `.env` |
+| `TS_HOSTNAME` | `night-watcher-pi` | Hostname this Pi registers as in the tailnet |
 | `NIGHT_WATCHER_URL` | `http://night-watcher:8000` | FastAPI URL polled by `metrics-exporter` |
 | `COLLECT_INTERVAL` | `15` | Scrape interval in seconds for `metrics-exporter` |
 | `EXPORTER_PORT` | `9100` | HTTP port exposed by `metrics-exporter` |
@@ -552,8 +627,9 @@ Night Watcher reports **people** and **animals** from the COCO dataset:
 ## Roadmap
 
 - Add two DHT22 sensors on the Raspberry Pi GPIO header to measure ambient temperature and humidity as well as enclosure temperature and humidity, enabling condensation alerts and a controlled Raspberry Pi shutdown when enclosure conditions become unsafe.
-- Add VPN access for secure remote administration and dashboard access.
 - Add photo documentation of the mechanical setup.
+
+See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full versioned release plan.
 
 ---
 

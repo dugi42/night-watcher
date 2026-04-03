@@ -4,6 +4,40 @@ Versioned release plan.  Each release is a stable tag on `main`.
 
 ---
 
+## v1.3.0 — Logging & Secure Remote Access ✅ Released
+
+> Infrastructure-only.  No application code changes required.
+
+### Logging
+
+| Change | File | Why |
+| --- | --- | --- |
+| Add Loki log aggregation service | `docker-compose.yml`, `loki/config.yaml` | Central log store for all container stdout/stderr logs, queryable in Grafana |
+| Add Promtail log shipper | `docker-compose.yml`, `promtail/config.yaml` | Ships Docker container logs to Loki with container/service labels |
+| Provision Loki as Grafana datasource | `grafana/provisioning/datasources/loki.yml` | Grafana → Explore → Loki available with zero manual setup |
+
+### Remote Access & TLS
+
+| Change | File | Why |
+| --- | --- | --- |
+| Add Tailscale VPN service | `docker-compose.yml`, `scripts/tailscale-start.sh` | Secure remote access to the Pi over a private Tailscale network; issues a TLS certificate via `tailscale cert` |
+| Add nginx TLS reverse proxy | `docker-compose.yml`, `nginx/nginx.conf` | Terminates HTTPS (cert from Tailscale) and routes all services behind a single endpoint |
+| Add `.env.example` | `.env.example` | Documents required `TS_AUTHKEY`, `TS_HOSTNAME`, and `TS_FQDN` variables |
+| Configure Grafana subpath serving | `docker-compose.yml` | `GF_SERVER_SERVE_FROM_SUB_PATH=true` so Grafana works at `/grafana/` behind nginx |
+| Configure Prometheus subpath serving | `docker-compose.yml` | `--web.route-prefix=/prometheus` so Prometheus UI works at `/prometheus/` behind nginx |
+| Bump version to 1.3.0 | `src/__init__.py`, `pyproject.toml`, `CITATION.cff` | Reflects new infrastructure milestone |
+
+### Access overview (after Tailscale setup)
+
+| URL | Service |
+| --- | --- |
+| `https://<ts-host>/` | Streamlit dashboard |
+| `https://<ts-host>/grafana/` | Grafana (logs + metrics) |
+| `https://<ts-host>/api/` | Night Watcher FastAPI |
+| `https://<ts-host>/prometheus/` | Prometheus UI |
+
+---
+
 ## v1.2.1 — Coverage & Metadata Sync ✅ Released
 
 > Code-only.  No hardware changes required.
@@ -93,26 +127,10 @@ Versioned release plan.  Each release is a stable tag on `main`.
 
 ---
 
-## v1.3 — Remote Access & Security
+## v1.3 — Remote Access & Security ✅ Delivered in v1.3.0
 
-> Code + configuration only.  No new hardware.
-
-### WireGuard VPN
-
-- Add `wg0.conf` template and a `docker-compose.override.yml` that binds service ports to the WireGuard interface only.
-- The Pi connects to a VPN server (e.g. a small cloud VM or a home router running WireGuard); the dashboard and Prometheus UI become accessible over the tunnel.
-- Document peer configuration for laptop and mobile.
-
-### Authentication
-
-- Optional HTTP basic auth on the Streamlit dashboard via `streamlit-authenticator` and `st.secrets`.
-- Single-user config (username + bcrypt hash) in a `.streamlit/secrets.toml` that is gitignored.
-- Document how to generate the hash and configure the secrets file.
-
-### Health check for VPN tunnel
-
-- `src/health.py` — add `get_vpn_status()` that reads `wg show` output.
-- Surface tunnel state in the Docker Services panel.
+> Implemented using Tailscale instead of WireGuard for zero-config peer setup.
+> See v1.3.0 release notes above.
 
 ---
 

@@ -78,7 +78,7 @@ services:
 
   # ---------------------------------------------------------------------------
   # Prometheus — scrapes OTel Collector metrics; stores time-series data.
-  # Dashboard: http://<pi-host>:9090
+  # Dashboard: https://<tailscale-host>/prometheus
   # ---------------------------------------------------------------------------
   prometheus:
     image: prom/prometheus:latest
@@ -93,14 +93,17 @@ services:
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=30d"
       - "--web.enable-lifecycle"
+      # Serve UI at /prometheus/ so nginx can proxy it at a subpath
+      - "--web.route-prefix=/prometheus"
+      - "--web.external-url=http://localhost/prometheus"
 
   # ---------------------------------------------------------------------------
   # Streamlit dashboard — runs on the Pi, accessible from any browser on the
-  # LAN at http://<pi-hostname>:8501.
+  # LAN at http://<pi-hostname>:8501, and over Tailscale at https://<ts-host>/.
   #
-  # The dashboard talks to FastAPI over the Docker network, while browser-facing
-  # stream/video/Grafana links are derived from the incoming request unless
-  # explicit public URLs are provided via PUBLIC_RASPI_URL and GRAFANA_URL.
+  # PUBLIC_RASPI_URL / GRAFANA_URL are browser-visible URLs derived from
+  # TS_FQDN so stream, video, and Grafana panel links work over HTTPS.
+  # Set TS_FQDN in .env after Tailscale connects (see .env.example).
   # ---------------------------------------------------------------------------
   dashboard:
     build: .
@@ -116,9 +119,10 @@ services:
       - PYTHONUNBUFFERED=1
       - RASPI_URL=http://night-watcher:8000
       - PROMETHEUS_URL=http://prometheus:9090
-      # Optional browser-visible overrides for reverse proxies or path-based routing:
-      # - PUBLIC_RASPI_URL=https://your-public-host/night-watcher-api
-      # - GRAFANA_URL=https://your-public-host/grafana
+      # Browser-visible HTTPS URLs for the Tailscale tunnel.
+      # TS_FQDN is read from .env — set it to your Tailscale FQDN.
+      - PUBLIC_RASPI_URL=https://${TS_FQDN:-raspberrypi.local}/api
+      - GRAFANA_URL=https://${TS_FQDN:-raspberrypi.local}/grafana
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
@@ -128,7 +132,7 @@ services:
 
   # ---------------------------------------------------------------------------
   # Grafana — dashboards and alerting on top of Prometheus.
-  # Dashboard: http://<pi-host>:3000
+  # Dashboard: https://<tailscale-host>/grafana
   # Default admin credentials: admin / nightwatcher
   # ---------------------------------------------------------------------------
   grafana:
@@ -141,13 +145,116 @@ services:
       - GF_AUTH_ANONYMOUS_ENABLED=false
       - GF_AUTH_BASIC_ENABLED=true
       - GF_AUTH_DISABLE_LOGIN_FORM=false
+      # Serve Grafana at the /grafana/ subpath so nginx can proxy it cleanly
+      - GF_SERVER_ROOT_URL=%(protocol)s://%(domain)s/grafana/
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
     volumes:
-      # Auto-provision the Prometheus datasource on first start
+      # Auto-provision datasources (Prometheus + Loki) on first start
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - grafana_data:/var/lib/grafana
     depends_on:
+      - prometheus
+      - loki
+
+  # ---------------------------------------------------------------------------
+  # Loki — log aggregation backend.
+  # Grafana uses Loki as a datasource for log exploration (Explore → Loki).
+  # ---------------------------------------------------------------------------
+  loki:
+    image: grafana/loki:latest
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki/config.yaml:/etc/loki/config.yaml:ro
+      - loki_data:/loki
+    command: -config.file=/etc/loki/config.yaml
+
+  # ---------------------------------------------------------------------------
+  # Promtail — log shipper.
+  # Discovers all running containers via the Docker socket and ships their
+  # stdout/stderr logs to Loki, labelled by container and service name.
+  # ---------------------------------------------------------------------------
+  promtail:
+    image: grafana/promtail:latest
+    restart: unless-stopped
+    volumes:
+      - ./promtail/config.yaml:/etc/promtail/config.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Promtail needs to read the actual log files on the host
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    command: -config.file=/etc/promtail/config.yaml
+    depends_on:
+      - loki
+
+  # ---------------------------------------------------------------------------
+  # Tailscale — VPN agent + TLS certificate provider.
+  #
+  # Connects the Pi to your Tailscale network and issues a TLS certificate
+  # for the Tailscale hostname via `tailscale cert`.  The cert is written to
+  # the shared `certs` volume that nginx reads.
+  #
+  # Prerequisites on the Pi host:
+  #   sudo tailscale up   (initial auth — only needed once if already logged in)
+  #
+  # Required environment variables (set in .env, see .env.example):
+  #   TS_AUTHKEY   — reusable auth key from https://login.tailscale.com/admin/settings/keys
+  #   TS_HOSTNAME  — machine name in your tailnet (default: night-watcher-pi)
+  #
+  # HTTPS Certificates must be enabled in the Tailscale admin console:
+  #   DNS → Enable HTTPS Certificates
+  # ---------------------------------------------------------------------------
+  tailscale:
+    image: tailscale/tailscale:latest
+    restart: unless-stopped
+    hostname: ${TS_HOSTNAME:-night-watcher-pi}
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_HOSTNAME=${TS_HOSTNAME:-night-watcher-pi}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=false
+    volumes:
+      - tailscale_state:/var/lib/tailscale
+      - certs:/certs
+      - /dev/net/tun:/dev/net/tun
+      - ./scripts/tailscale-start.sh:/start.sh:ro
+    command: /bin/sh /start.sh
+
+  # ---------------------------------------------------------------------------
+  # nginx — TLS reverse proxy.
+  #
+  # Terminates TLS using the Tailscale-issued certificate and routes all
+  # services behind a single HTTPS endpoint:
+  #   /           → Streamlit dashboard  (:8501)
+  #   /grafana/   → Grafana              (:3000)
+  #   /api/       → Night Watcher API    (:8000)
+  #   /prometheus/ → Prometheus          (:9090)
+  #
+  # Port 443 is the only port that needs to be accessible externally (via
+  # Tailscale).  Port 80 redirects to HTTPS.
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - certs:/certs:ro
+    depends_on:
+      - tailscale
+      - dashboard
+      - grafana
+      - night-watcher
       - prometheus
 
 volumes:
   prometheus_data:
   grafana_data:
+  loki_data:
+  tailscale_state:
+  certs:

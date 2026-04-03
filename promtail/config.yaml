@@ -1,0 +1,34 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # Discover all running containers via the Docker socket and ship their logs
+  # to Loki, labelling each stream by container name and compose service.
+  - job_name: containers
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          - name: status
+            values: ["running"]
+    relabel_configs:
+      # Strip the leading / from the container name
+      - source_labels: [__meta_docker_container_name]
+        regex: /(.*)
+        target_label: container
+      # Preserve stdout / stderr stream label
+      - source_labels: [__meta_docker_container_log_stream]
+        target_label: stream
+      # Add the Compose service name as a label when available
+      - source_labels: [__meta_docker_compose_service]
+        target_label: service
+    pipeline_stages:
+      # Parse Docker JSON log wrapper (timestamp, stream, log fields)
+      - docker: {}

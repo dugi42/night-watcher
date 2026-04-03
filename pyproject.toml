@@ -1,6 +1,6 @@
 [project]
 name = "night-watcher"
-version = "1.2.1"
+version = "1.3.0"
 description = "Raspberry Pi wildlife camera with YOLO detection, Prometheus metrics, and a Streamlit dashboard running on the Pi"
 readme = "README.md"
 license = { text = "MIT" }
