@@ -4,6 +4,20 @@ Versioned release plan.  Each release is a stable tag on `main`.
 
 ---
 
+## v1.3.1 — Bug Fixes ✅ Released
+
+> Infrastructure bug fixes only.  No application or hardware changes required.
+
+| Fix | Files | What was wrong |
+| --- | --- | --- |
+| TLS cert issuance | `deploy.yml`, `docker-compose.yml`, `.gitignore` | Tailscale Docker container conflicted with the host daemon; replaced with `tailscale cert` call on the Pi host during deploy; nginx mounts `./certs/` as a bind mount |
+| Prometheus subpath routing | `nginx/nginx.conf`, `docker-compose.yml`, `grafana/provisioning/datasources/prometheus.yml` | `--web.route-prefix=/prometheus` caused Grafana datasource API queries to hit the wrong path; fixed with nginx prefix stripping |
+| OTel metric naming | `src/telemetry.py`, `src/service.py` | `night_watcher.` prefix in metric names doubled with collector namespace → `night_watcher_night_watcher_…`; removed `setup_health_telemetry()` to eliminate duplicate system metrics |
+| Streamlit HTTPS links | `app.py` | Session state preserved stale HTTP URLs after switching to HTTPS; added origin-change detection to reset derived URL fields |
+| Grafana/Prometheus redirect URLs | `docker-compose.yml` | `%(domain)s` and `http://localhost` placeholders resolved to `localhost`; replaced with `${TS_FQDN}` |
+
+---
+
 ## v1.3.0 — Logging & Secure Remote Access ✅ Released
 
 > Infrastructure-only.  No application code changes required.
@@ -20,11 +34,11 @@ Versioned release plan.  Each release is a stable tag on `main`.
 
 | Change | File | Why |
 | --- | --- | --- |
-| Add Tailscale VPN service | `docker-compose.yml`, `scripts/tailscale-start.sh` | Secure remote access to the Pi over a private Tailscale network; issues a TLS certificate via `tailscale cert` |
+| Add Tailscale VPN + TLS | `deploy.yml`, `nginx/nginx.conf` | Secure remote access via host Tailscale daemon; TLS cert issued by `tailscale cert` during deploy |
 | Add nginx TLS reverse proxy | `docker-compose.yml`, `nginx/nginx.conf` | Terminates HTTPS (cert from Tailscale) and routes all services behind a single endpoint |
 | Add `.env.example` | `.env.example` | Documents required `TS_AUTHKEY`, `TS_HOSTNAME`, and `TS_FQDN` variables |
 | Configure Grafana subpath serving | `docker-compose.yml` | `GF_SERVER_SERVE_FROM_SUB_PATH=true` so Grafana works at `/grafana/` behind nginx |
-| Configure Prometheus subpath serving | `docker-compose.yml` | `--web.route-prefix=/prometheus` so Prometheus UI works at `/prometheus/` behind nginx |
+| Configure Prometheus subpath serving | `nginx/nginx.conf` | nginx prefix-stripping so Prometheus UI works at `/prometheus/` behind the reverse proxy |
 | Bump version to 1.3.0 | `src/__init__.py`, `pyproject.toml`, `CITATION.cff` | Reflects new infrastructure milestone |
 
 ### Access overview (after Tailscale setup)
