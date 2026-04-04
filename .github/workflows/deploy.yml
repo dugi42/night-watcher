@@ -53,12 +53,11 @@ jobs:
           TS_HOSTNAME_VAL: ${{ secrets.TS_HOSTNAME }}
           TS_FQDN_VAL: ${{ secrets.TS_FQDN }}
         run: |
-          # Build .env locally from environment variables (safe for any special chars)
-          {
-            printf 'TS_AUTHKEY=%s\n'  "$TS_AUTHKEY_VAL"
-            printf 'TS_HOSTNAME=%s\n' "$TS_HOSTNAME_VAL"
-            printf 'TS_FQDN=%s\n'     "$TS_FQDN_VAL"
-          } > /tmp/night-watcher.env
+          # Build .env on disk — only TS_FQDN is needed by Docker Compose
+          # (for Prometheus --web.external-url and Grafana GF_SERVER_ROOT_URL).
+          # TS_AUTHKEY / TS_HOSTNAME are used by the runner steps above, not by
+          # any container in the stack.
+          printf 'TS_FQDN=%s\n' "$TS_FQDN_VAL" > /tmp/night-watcher.env
 
           # Clone the repo if this is the first deploy, otherwise pull
           ssh $SSH_OPTS "${TARGET}" '

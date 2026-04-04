@@ -207,6 +207,16 @@ def _render_sidebar() -> tuple[str, str, str, str]:
     with st.sidebar:
         st.image("assets/logo.jpeg", width="stretch")
         st.title("Night Watcher")
+
+        # If the request origin has changed (e.g. HTTP → HTTPS after enabling
+        # Tailscale TLS) reset the cached URL values so they recompute from
+        # the new origin rather than keeping stale session-state values.
+        _current_origin = _request_origin() or ""
+        if st.session_state.get("_last_origin") != _current_origin:
+            st.session_state["_last_origin"] = _current_origin
+            for _k in ("_pub_url", "_grafana_url"):
+                st.session_state.pop(_k, None)
+
         api_url = st.text_input(
             "Pi API URL",
             value=DEFAULT_URL,
@@ -215,6 +225,7 @@ def _render_sidebar() -> tuple[str, str, str, str]:
         public_url = st.text_input(
             "Public media URL",
             value=_default_public_api_url(),
+            key="_pub_url",
             help="Used by your browser for the live stream, video playback, and full-screen links.",
         )
         prom_url = st.text_input("Prometheus URL", value=DEFAULT_PROM_URL,
@@ -222,6 +233,7 @@ def _render_sidebar() -> tuple[str, str, str, str]:
         grafana_url = st.text_input(
             "Grafana URL",
             value=_default_grafana_url(),
+            key="_grafana_url",
             help="Browser-visible Grafana URL for the Health tab link.",
         )
 

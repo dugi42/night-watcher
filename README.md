@@ -30,12 +30,13 @@ remote-access layer on top of the existing Pi-side stack:
 - Session-based annotated video recording with persistent metadata storage.
 - **Streamlit dashboard runs as a Docker service on the Pi** (port 8501) — open
   it in any browser on your LAN, no local installation needed.
-- **Grafana** instance with Prometheus as the pre-configured datasource — all
-  metrics are available as time-series dashboards out of the box (port 3000).
+- **Grafana** instance with Prometheus and Loki pre-configured as datasources —
+  all metrics and logs are available in a single tool out of the box (port 3000).
 - **Loki + Promtail** log aggregation — all container logs are shipped to Loki
   and browsable in Grafana's Explore view, no SSH required.
-- **Tailscale VPN** — the Pi joins your Tailscale network and is reachable from
-  any device on the tailnet; the VPN issues a TLS certificate automatically.
+- **Tailscale VPN** — the Pi runs Tailscale on the host and is reachable from
+  any device on the tailnet; the deploy workflow issues a TLS certificate via
+  `tailscale cert` on the Pi host before starting the Docker stack.
 - **nginx TLS reverse proxy** — terminates HTTPS using the Tailscale certificate
   and routes all services behind a single `https://<ts-host>/` endpoint.
 - **GitHub Actions CI/CD pipeline** — automated test, coverage, and deploy
@@ -70,23 +71,25 @@ flowchart LR
             ci["CI — ci.yml\npytest · Codecov"]
             dep["Deploy — deploy.yml\nSSH → Pi"]
         end
-        sec["Secrets\nTS_AUTHKEY · TS_HOSTNAME\nTS_FQDN · PI_HOST\nPI_USER · PI_SSH_KEY"]
+        sec["Secrets\nTS_AUTHKEY · TS_HOSTNAME\nTS_FQDN · PI_USER · PI_SSH_KEY"]
     end
 
     subgraph pi["🍓 Raspberry Pi"]
         pull["git pull"]
-        env["write .env\nfrom Secrets"]
+        env["write .env\n(TS_FQDN only)"]
+        cert["tailscale cert\n→ ./certs/"]
         up["docker compose up\n--build -d"]
-        svc["10 services running"]
+        svc["9 services running"]
     end
 
     dev --> repo
     repo --> ci
     repo --> dep
     sec --> dep
-    dep -->|appleboy/ssh-action| pull
+    dep -->|Tailscale tunnel + SSH| pull
     pull --> env
-    env --> up
+    env --> cert
+    cert --> up
     up --> svc
 ```
 
@@ -129,7 +132,6 @@ flowchart TD
         end
 
         subgraph remote["Remote Access"]
-            ts["tailscale\nVPN + TLS cert"]
             ng["nginx :443\nTLS reverse proxy"]
         end
 
@@ -148,7 +150,6 @@ flowchart TD
     promtail -->|docker logs| loki
     prom --> graf
     loki --> graf
-    ts -->|cert.pem → shared volume| ng
     ng -->|"/"| dash
     ng -->|"/grafana"| graf
     ng -->|"/api/"| detection
@@ -187,9 +188,11 @@ resolve to the Tailscale FQDN so they work over HTTPS from any device on the tai
 which Grafana queries alongside Prometheus — giving a unified view of metrics
 and logs in a single tool without SSH access to the Pi.
 
-**Tailscale** connects the Pi to a private VPN and fetches a TLS certificate
-via `tailscale cert`.  **nginx** (:443) uses that certificate to terminate
-HTTPS and route all services behind a single domain:
+**Tailscale** runs on the Pi **host** (not in Docker) and connects the Pi to a
+private VPN.  The deploy workflow calls `tailscale cert` on the host at each
+deploy, writing `./certs/cert.pem` and `./certs/key.pem` before starting the
+stack.  **nginx** (:443) mounts those files and uses them to terminate HTTPS,
+routing all services behind a single domain:
 `/` → dashboard · `/grafana` → Grafana · `/api/` → FastAPI · `/prometheus` → Prometheus.
 
 ---
@@ -210,7 +213,7 @@ cd night-watcher
 docker compose up --build -d
 ```
 
-This starts ten services:
+This starts nine services:
 
 | Service | Port(s) | Purpose |
 | --- | --- | --- |
@@ -220,9 +223,8 @@ This starts ten services:
 | `prometheus` | `9090` | Scrapes and stores time-series metrics (30-day retention) |
 | `grafana` | `3000` | Dashboards — Prometheus + Loki pre-configured as datasources |
 | `loki` | `3100` | Log aggregation backend |
-| `promtail` | `9080` | Ships Docker container logs to Loki |
+| `promtail` | — | Ships Docker container logs to Loki |
 | `dashboard` | `8501` | Streamlit dashboard — live stream, statistics, health KPIs |
-| `tailscale` | — | VPN agent; joins tailnet and issues a TLS certificate |
 | `nginx` | `80`, `443` | TLS reverse proxy — routes all services behind HTTPS |
 
 On first build the YOLO11n weights are downloaded and baked into the image.
@@ -231,10 +233,21 @@ On first build the YOLO11n weights are downloaded and baked into the image.
 
 #### Prerequisites
 
-Enable **HTTPS Certificates** for your tailnet in the Tailscale admin console:
-**DNS → Enable HTTPS Certificates**.
+1. **Install Tailscale on the Pi host** (not inside Docker):
 
-Create a reusable auth key at <https://login.tailscale.com/admin/settings/keys>.
+   ```bash
+   curl -fsSL https://tailscale.com/install.sh | sh
+   sudo tailscale up
+   ```
+
+2. Enable **HTTPS Certificates** for your tailnet in the Tailscale admin console:
+   **DNS → Enable HTTPS Certificates**.
+
+3. Allow your SSH user to run `tailscale cert` without sudo (run once on the Pi):
+
+   ```bash
+   sudo tailscale set --operator=$USER
+   ```
 
 #### GitHub Secrets (automated deployment via `deploy.yml`)
 
@@ -245,28 +258,31 @@ Add the following secrets to your repository
 | --- | --- |
 | `PI_USER` | SSH user on the Pi (e.g. `pi`) |
 | `PI_SSH_KEY` | SSH private key — paste the **full PEM block** including `-----BEGIN ... PRIVATE KEY-----` and `-----END ... PRIVATE KEY-----` lines |
-| `TS_AUTHKEY` | Tailscale auth key (used both for the Pi's VPN agent and to connect the GitHub Actions runner to the tailnet) |
-| `TS_HOSTNAME` | Machine name the Pi registers as in your tailnet (e.g. `night-watcher-pi`) — also used as the SSH host in the deploy step |
-| `TS_FQDN` | Full Tailscale domain once connected (e.g. `night-watcher-pi.tail1a2b3c.ts.net`) |
+| `TS_AUTHKEY` | Tailscale auth key — used to connect the **GitHub Actions runner** to your tailnet so it can SSH to the Pi |
+| `TS_HOSTNAME` | Tailscale machine name of the Pi (e.g. `night-watcher`) — used as the SSH host in the deploy step |
+| `TS_FQDN` | Full Tailscale FQDN of the Pi (e.g. `night-watcher.tail00fb8b.ts.net`) — used by Prometheus and Grafana for correct redirect URLs |
 
-> **No `PI_HOST` needed.** The deploy workflow joins the Actions runner to your
-> Tailscale network first, then SSHes to the Pi by `TS_HOSTNAME` — no public
-> IP or open firewall port required.
+> **No public IP or open firewall port required.** The deploy workflow joins
+> the Actions runner to your tailnet first, then SSHes to the Pi by its
+> Tailscale hostname.
 
 Push to `main` — the workflow:
 
 1. Joins the GitHub Actions runner to your tailnet (`tailscale/github-action`)
-2. SSHes to the Pi via its Tailscale hostname
-3. Pulls the latest code, writes `.env` from secrets, runs `docker compose up`
+2. SSHes to the Pi, clones or pulls the repo
+3. Writes `.env` (containing `TS_FQDN`) from GitHub Secrets
+4. Calls `tailscale cert` on the Pi host — writes `./certs/cert.pem` + `./certs/key.pem`
+5. Runs `docker compose up --build -d`
 
-To find `TS_FQDN` after the first deploy:
+To find `TS_FQDN`:
 
 ```bash
-ssh <pi-user>@<TS_HOSTNAME> "docker compose -f ~/night-watcher/docker-compose.yml exec tailscale tailscale status"
+ssh <pi-user>@<TS_HOSTNAME> tailscale status --self
+# or on the Pi:
+tailscale status
 ```
 
-Then update `TS_FQDN` in GitHub Secrets and push again to rebuild the dashboard
-with the correct HTTPS URLs.
+Then set `TS_FQDN` in GitHub Secrets and push to deploy.
 
 ### 4. Open the dashboard
 
