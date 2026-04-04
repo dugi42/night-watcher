@@ -38,6 +38,8 @@ remote-access layer on top of the existing Pi-side stack:
   any device on the tailnet; the VPN issues a TLS certificate automatically.
 - **nginx TLS reverse proxy** — terminates HTTPS using the Tailscale certificate
   and routes all services behind a single `https://<ts-host>/` endpoint.
+- **GitHub Actions CI/CD pipeline** — automated test, coverage, and deploy
+  workflows; secrets managed in GitHub, never stored in the repository.
 - Every resource metric ships both a percentage *and* an absolute value
   (e.g. `disk_used_gb` + `disk_free_gb` + `disk_total_gb`).
 - YOLO inference time is measured inside the background worker thread so
@@ -49,76 +51,110 @@ remote-access layer on top of the existing Pi-side stack:
 
 ---
 
-## Quality Status
+## CI/CD & Deployment
 
-- GitHub Actions runs unit tests and publishes a coverage report on every push and pull request.
-- Coverage is reported via Codecov once the workflow has executed on GitHub.
-- The CI badge becomes live after the workflow file is pushed and GitHub has completed the first run on `main`.
+Two GitHub Actions workflows run on every push to `main`:
+
+| Workflow | File | What it does |
+| --- | --- | --- |
+| **CI** | `.github/workflows/ci.yml` | Runs 61 unit tests with coverage; uploads report to Codecov |
+| **Deploy** | `.github/workflows/deploy.yml` | SSHs into the Pi, writes a gitignored `.env` from GitHub Secrets, runs `docker compose up --build` |
+
+```mermaid
+flowchart LR
+    dev("👨‍💻 Developer\ngit push main")
+
+    subgraph gh["GitHub"]
+        repo["main branch"]
+        subgraph actions["GitHub Actions"]
+            ci["CI — ci.yml\npytest · Codecov"]
+            dep["Deploy — deploy.yml\nSSH → Pi"]
+        end
+        sec["Secrets\nTS_AUTHKEY · TS_HOSTNAME\nTS_FQDN · PI_HOST\nPI_USER · PI_SSH_KEY"]
+    end
+
+    subgraph pi["🍓 Raspberry Pi"]
+        pull["git pull"]
+        env["write .env\nfrom Secrets"]
+        up["docker compose up\n--build -d"]
+        svc["10 services running"]
+    end
+
+    dev --> repo
+    repo --> ci
+    repo --> dep
+    sec --> dep
+    dep -->|appleboy/ssh-action| pull
+    pull --> env
+    env --> up
+    up --> svc
+```
+
+Secrets are managed entirely in GitHub (**Settings → Secrets and variables → Actions**) and are never committed to the repository.
 
 ---
 
 ## Architecture
 
-```text
-┌──────────────────────────────────────────────────────────────────────────┐
-│  Raspberry Pi (Docker host)                                              │
-│                                                                          │
-│  ┌──────────────────────────────────────────┐                            │
-│  │  night-watcher  :8000  (FastAPI)         │                            │
-│  │                                          │                            │
-│  │  ┌──────────┐  ┌──────────┐              │                            │
-│  │  │ camera   │→ │ detector │              │                            │
-│  │  │ (V4L2)   │  │ (YOLO11n)│              │                            │
-│  │  └──────────┘  └────┬─────┘              │                            │
-│  │                     │ detections         │                            │
-│  │               ┌─────▼──────┐             │                            │
-│  │               │  tracker   │→ callbacks  │                            │
-│  │               └────────────┘      │      │                            │
-│  │  /assets/video/*.mp4    ┌─────────▼──┐   │                            │
-│  │  /assets/meta/          │  recorder  │   │                            │
-│  │    detections.json      └────────────┘   │                            │
-│  │  /assets/logs/app.db                     │                            │
-│  │                          ┌───────────┐   │                            │
-│  │  Emits OTLP traces  ───→ │ telemetry │   │                            │
-│  │                          └───────────┘   │                            │
-│  └──────────────────────────────────────────┘                            │
-│            │ HTTP /metrics/app                                           │
-│            │ shared SQLite (volume)                                      │
-│            ▼                                                             │
-│  ┌───────────────────────────┐                                           │
-│  │  metrics-exporter  :9100  │                                           │
-│  │  polls every 15s:         │                                           │
-│  │  • psutil (CPU/mem/disk)  │  → absolute + relative per metric         │
-│  │  • vcgencmd (PMIC rails)  │                                           │
-│  │  • /metrics/app  (HTTP)   │                                           │
-│  │  • SQLite log counts      │                                           │
-│  └───────────────────────────┘                                           │
-│                                                                          │
-│  ┌───────────────────────────┐   ┌─────────────────────────────┐         │
-│  │  otel-collector           │   │  prometheus  :9090          │         │
-│  │  :4317 gRPC               │   │                             │         │
-│  │  :4318 HTTP               │   │  scrapes:                   │         │
-│  │  :9464 /metrics           │◄──│  • metrics-exporter:9100    │         │
-│  │                           │   │  • otel-collector:9464      │         │
-│  └───────────────────────────┘   │  retention: 30d             │         │
-│                                  └──────────────┬──────────────┘         │
-│                                                 │                        │
-│  ┌──────────────────────────────┐   ┌───────────▼──────────────┐         │
-│  │  dashboard  :8501            │   │  grafana  :3000          │         │
-│  │  (Streamlit)                 │   │                          │         │
-│  │                              │   │  datasource: Prometheus  │         │
-│  │  • queries night-watcher API │   │  (auto-provisioned)      │         │
-│  │  • serves MJPEG / video via  │   └──────────────────────────┘         │
-│  │    raspberrypi.local hostname│                                        │
-│  │  • links to Grafana :3000    │                                        │
-│  └──────────────────────────────┘                                        │
-└──────────────────────────────────────────────────────────────────────────┘
-                    ▲                              ▲
-                    │ HTTP :8501 (LAN)             │ HTTP :3000 (LAN)
-                    │                              │
-              ┌─────┴──────────────────────────────┴──┐
-              │        Browser (any device on LAN)    │
-              └───────────────────────────────────────┘
+```mermaid
+flowchart TD
+    cam("📷 USB Camera\nV4L2")
+
+    subgraph pi["🍓 Raspberry Pi — Docker Compose Stack"]
+
+        subgraph detection["Detection Core  (night-watcher :8000)"]
+            camera["camera"]
+            detector["detector\nYOLO11n"]
+            tracker["tracker"]
+            recorder["recorder"]
+            telemetry["telemetry\nOTLP"]
+        end
+
+        assets[("assets/\nvideo · meta · logs\nSQLite")]
+
+        subgraph metrics["Metrics Pipeline"]
+            exp["metrics-exporter :9100\npsutil · vcgencmd\napp counters · log stats"]
+            otel["otel-collector\n:4317 gRPC  :4318 HTTP\n:9464 /metrics"]
+            prom["prometheus :9090\n30-day retention"]
+        end
+
+        subgraph logging["Log Aggregation"]
+            promtail["promtail\nDocker log shipper"]
+            loki["loki :3100"]
+        end
+
+        subgraph frontend["Frontend"]
+            dash["dashboard :8501\nStreamlit"]
+            graf["grafana :3000\nPrometheus + Loki"]
+        end
+
+        subgraph remote["Remote Access"]
+            ts["tailscale\nVPN + TLS cert"]
+            ng["nginx :443\nTLS reverse proxy"]
+        end
+
+    end
+
+    browser("🌐 Browser")
+
+    cam --> camera --> detector --> tracker --> recorder
+    tracker --> telemetry
+    recorder --> assets
+    exp -.->|polls /metrics/app| detection
+    exp -.->|SQLite| assets
+    telemetry -->|OTLP HTTP| otel
+    otel -->|scrape :9464| prom
+    exp -->|scrape :9100| prom
+    promtail -->|docker logs| loki
+    prom --> graf
+    loki --> graf
+    ts -->|cert.pem → shared volume| ng
+    ng -->|"/"| dash
+    ng -->|"/grafana"| graf
+    ng -->|"/api/"| detection
+    ng -->|"/prometheus"| prom
+    browser -->|"HTTP :8501 (LAN)"| dash
+    browser -->|"HTTPS :443 (Tailscale)"| ng
 ```
 
 The **Pi service** (`src/service.py`) runs inside Docker:
@@ -144,9 +180,17 @@ so time-series data (including CPU temperature) persists across dashboard restar
 
 The **Streamlit dashboard** (`app.py`) runs as a Docker service on the Pi
 (port 8501). It connects to the other services via Docker-internal hostnames
-for server-side API calls; the MJPEG stream and video playback URLs use the
-Pi's mDNS hostname (`raspberrypi.local`) so they are reachable directly from
-the user's browser without any proxying.
+for server-side API calls; browser-facing stream, video, and Grafana links
+resolve to the Tailscale FQDN so they work over HTTPS from any device on the tailnet.
+
+**Promtail** ships the stdout/stderr of every container to **Loki** (:3100),
+which Grafana queries alongside Prometheus — giving a unified view of metrics
+and logs in a single tool without SSH access to the Pi.
+
+**Tailscale** connects the Pi to a private VPN and fetches a TLS certificate
+via `tailscale cert`.  **nginx** (:443) uses that certificate to terminate
+HTTPS and route all services behind a single domain:
+`/` → dashboard · `/grafana` → Grafana · `/api/` → FastAPI · `/prometheus` → Prometheus.
 
 ---
 
