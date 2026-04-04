@@ -82,7 +82,7 @@ jobs:
             cd ~/night-watcher
             TS_FQDN=\$(grep '^TS_FQDN=' .env | cut -d= -f2-)
             mkdir -p certs
-            tailscale cert \
+            sudo tailscale cert \
               --cert-file=certs/cert.pem \
               --key-file=certs/key.pem \
               \"\$TS_FQDN\"
