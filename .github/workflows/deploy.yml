@@ -21,12 +21,26 @@ jobs:
           hostname: github-actions-deploy
 
       # Write the SSH private key to an absolute path.
-      # Using ~ in a file path is not reliably expanded by all SSH tools.
+      # Passed via env: so the shell never interprets the key content.
+      # sed converts any literal \n sequences (common when pasting into
+      # GitHub Secrets) to real newlines.
+      # ssh-keygen validates the result early with a clear error message.
       - name: Write SSH key
+        env:
+          PI_SSH_KEY: ${{ secrets.PI_SSH_KEY }}
         run: |
           mkdir -p /home/runner/.ssh
-          printf '%s' "${{ secrets.PI_SSH_KEY }}" > /home/runner/.ssh/deploy_key
+          printf '%s\n' "$PI_SSH_KEY" \
+            | sed 's/\\n/\n/g' \
+            > /home/runner/.ssh/deploy_key
           chmod 600 /home/runner/.ssh/deploy_key
+          if ! ssh-keygen -y -f /home/runner/.ssh/deploy_key > /dev/null 2>&1; then
+            echo "::error::PI_SSH_KEY is invalid. The secret must contain the full private" \
+                 "key including -----BEGIN OPENSSH PRIVATE KEY----- and" \
+                 "-----END OPENSSH PRIVATE KEY----- lines with real newlines." \
+                 "Copy the output of: cat ~/.ssh/id_ed25519"
+            exit 1
+          fi
 
       # Copy .env to the Pi and run docker compose.
       # Uses native ssh/scp — no third-party action required once Tailscale
