@@ -8,6 +8,9 @@ __pycache__/
 .env
 .envrc
 
+# TLS certs written by `tailscale cert` during deploy — never commit
+/certs/
+
 # Tooling caches
 .ruff_cache/
 .mypy_cache/

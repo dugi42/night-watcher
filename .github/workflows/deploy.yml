@@ -42,9 +42,6 @@ jobs:
             exit 1
           fi
 
-      # Copy .env to the Pi and run docker compose.
-      # Uses native ssh/scp — no third-party action required once Tailscale
-      # has connected the runner to the tailnet.
       - name: Deploy to Pi
         env:
           SSH_OPTS: >-
@@ -75,6 +72,22 @@ jobs:
 
           # Copy .env to the Pi — never committed to git, only lives on the device
           scp $SSH_OPTS /tmp/night-watcher.env "${TARGET}:~/night-watcher/.env"
+
+          # Issue TLS cert on the Pi using the host Tailscale daemon.
+          # The cert is written to ./certs/ which nginx mounts as a bind mount.
+          # Requires HTTPS certs to be enabled in the Tailscale admin console:
+          #   DNS → Enable HTTPS Certificates
+          ssh $SSH_OPTS "${TARGET}" "
+            set -e
+            cd ~/night-watcher
+            TS_FQDN=\$(grep '^TS_FQDN=' .env | cut -d= -f2-)
+            mkdir -p certs
+            tailscale cert \
+              --cert-file=certs/cert.pem \
+              --key-file=certs/key.pem \
+              \"\$TS_FQDN\"
+            echo \"TLS cert written for \$TS_FQDN\"
+          "
 
           # Restart the stack
           ssh $SSH_OPTS "${TARGET}" '
