@@ -120,9 +120,11 @@ services:
       - RASPI_URL=http://night-watcher:8000
       - PROMETHEUS_URL=http://prometheus:9090
       # Browser-visible HTTPS URLs for the Tailscale tunnel.
-      # TS_FQDN is read from .env — set it to your Tailscale FQDN.
-      - PUBLIC_RASPI_URL=https://${TS_FQDN:-raspberrypi.local}/api
-      - GRAFANA_URL=https://${TS_FQDN:-raspberrypi.local}/grafana
+      # Written by the deploy workflow from TS_FQDN (see .github/workflows/deploy.yml).
+      # When empty the dashboard derives URLs from the incoming request,
+      # which keeps LAN access working without any Tailscale configuration.
+      - PUBLIC_RASPI_URL=${PUBLIC_RASPI_URL:-}
+      - GRAFANA_URL=${GRAFANA_URL:-}
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
