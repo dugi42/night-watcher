@@ -58,11 +58,9 @@ jobs:
         run: |
           # Build .env locally from environment variables (safe for any special chars)
           {
-            printf 'TS_AUTHKEY=%s\n'       "$TS_AUTHKEY_VAL"
-            printf 'TS_HOSTNAME=%s\n'      "$TS_HOSTNAME_VAL"
-            printf 'TS_FQDN=%s\n'          "$TS_FQDN_VAL"
-            printf 'PUBLIC_RASPI_URL=%s\n' "https://${TS_FQDN_VAL}/api"
-            printf 'GRAFANA_URL=%s\n'       "https://${TS_FQDN_VAL}/grafana"
+            printf 'TS_AUTHKEY=%s\n'  "$TS_AUTHKEY_VAL"
+            printf 'TS_HOSTNAME=%s\n' "$TS_HOSTNAME_VAL"
+            printf 'TS_FQDN=%s\n'     "$TS_FQDN_VAL"
           } > /tmp/night-watcher.env
 
           # Clone the repo if this is the first deploy, otherwise pull

@@ -103,6 +103,11 @@ def _default_public_api_url() -> str:
 
     origin = _request_origin()
     if origin:
+        port = urlsplit(origin).port
+        # Standard ports (None = 443 implicit, 80, 443) mean we're behind the
+        # nginx reverse proxy — the API is at the /api subpath, not port 8000.
+        if port in (None, 80, 443):
+            return origin.rstrip("/") + "/api"
         return _with_port(origin, 8000)
 
     return "http://raspberrypi.local:8000"
@@ -116,6 +121,10 @@ def _default_grafana_url() -> str:
 
     origin = _request_origin()
     if origin:
+        port = urlsplit(origin).port
+        # Same proxy detection — Grafana is at /grafana, not port 3000.
+        if port in (None, 80, 443):
+            return origin.rstrip("/") + "/grafana"
         return _with_port(origin, 3000)
 
     return "http://raspberrypi.local:3000"
