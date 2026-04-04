@@ -95,7 +95,7 @@ services:
       - "--web.enable-lifecycle"
       # Serve UI at /prometheus/ so nginx can proxy it at a subpath
       - "--web.route-prefix=/prometheus"
-      - "--web.external-url=http://localhost/prometheus"
+      - "--web.external-url=https://${TS_FQDN:-localhost}/prometheus"
 
   # ---------------------------------------------------------------------------
   # Streamlit dashboard — runs on the Pi, accessible from any browser on the
@@ -148,7 +148,7 @@ services:
       - GF_AUTH_BASIC_ENABLED=true
       - GF_AUTH_DISABLE_LOGIN_FORM=false
       # Serve Grafana at the /grafana/ subpath so nginx can proxy it cleanly
-      - GF_SERVER_ROOT_URL=%(protocol)s://%(domain)s/grafana/
+      - GF_SERVER_ROOT_URL=https://${TS_FQDN:-localhost}/grafana/
       - GF_SERVER_SERVE_FROM_SUB_PATH=true
     volumes:
       # Auto-provision datasources (Prometheus + Loki) on first start
