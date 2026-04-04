@@ -217,6 +217,7 @@ services:
     environment:
       - TS_AUTHKEY=${TS_AUTHKEY}
       - TS_HOSTNAME=${TS_HOSTNAME:-night-watcher-pi}
+      - TS_FQDN=${TS_FQDN:-}
       - TS_STATE_DIR=/var/lib/tailscale
       - TS_USERSPACE=false
     volumes:
@@ -242,6 +243,17 @@ services:
   nginx:
     image: nginx:alpine
     restart: unless-stopped
+    # Wait for the tailscale container to write cert.pem/key.pem before
+    # starting nginx — without this nginx fails immediately on a fresh deploy
+    # because the certs volume is empty.
+    entrypoint: >
+      /bin/sh -c "
+        until [ -f /certs/cert.pem ] && [ -f /certs/key.pem ]; do
+          echo '[nginx-wait] Waiting for TLS cert...'; sleep 3;
+        done;
+        echo '[nginx-wait] Cert found, starting nginx.';
+        exec nginx -g 'daemon off;'
+      "
     ports:
       - "80:80"
       - "443:443"

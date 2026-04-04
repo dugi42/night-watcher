@@ -13,6 +13,10 @@
 set -e
 
 HOSTNAME="${TS_HOSTNAME:-night-watcher-pi}"
+# Use full FQDN for cert if provided, otherwise fall back to short hostname.
+# `tailscale cert` requires the exact name the cert will be issued for —
+# the FQDN (e.g. night-watcher.tail00fb8b.ts.net) is safest.
+CERT_DOMAIN="${TS_FQDN:-${HOSTNAME}}"
 
 # Start the official Tailscale container entrypoint in the background.
 # containerboot reads TS_AUTHKEY, TS_HOSTNAME, etc. and calls `tailscale up`.
@@ -33,14 +37,14 @@ done
 echo "[tailscale] Connected."
 
 # Fetch the TLS certificate issued by Tailscale's ACME endpoint.
-# Requires HTTPS certificates to be enabled for the tailnet
-# (Tailscale admin console → DNS → Enable HTTPS Certificates).
-echo "[tailscale] Fetching TLS certificate for ${HOSTNAME}..."
+# Requires HTTPS certificates to be enabled for the tailnet:
+#   Tailscale admin console → DNS → Enable HTTPS Certificates
+echo "[tailscale] Fetching TLS certificate for ${CERT_DOMAIN}..."
 mkdir -p /certs
 tailscale cert \
     --cert-file=/certs/cert.pem \
     --key-file=/certs/key.pem \
-    "${HOSTNAME}"
+    "${CERT_DOMAIN}"
 echo "[tailscale] Certificate written to /certs/cert.pem + /certs/key.pem"
 
 # Forward signals to containerboot and wait for it to exit.
