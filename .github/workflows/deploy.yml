@@ -20,14 +20,21 @@ jobs:
           authkey: ${{ secrets.TS_AUTHKEY }}
           hostname: github-actions-deploy
 
+      # Write the SSH private key to a file so appleboy/ssh-action reads it
+      # via key_path.  Passing a multiline secret directly through the `key:`
+      # YAML field can silently strip newlines and break PEM decoding.
+      - name: Write SSH key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s' "${{ secrets.PI_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
       - name: Deploy to Pi via SSH
         uses: appleboy/ssh-action@v1.2.0
         with:
-          # Reach the Pi over Tailscale by its hostname (not a LAN IP).
-          # PI_HOST is no longer needed.
           host: ${{ secrets.TS_HOSTNAME }}
           username: ${{ secrets.PI_USER }}
-          key: ${{ secrets.PI_SSH_KEY }}
+          key_path: ~/.ssh/deploy_key
           script: |
             set -e
             cd ~/night-watcher
