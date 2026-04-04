@@ -93,9 +93,6 @@ services:
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=30d"
       - "--web.enable-lifecycle"
-      # Serve UI at /prometheus/ so nginx can proxy it at a subpath
-      - "--web.route-prefix=/prometheus"
-      - "--web.external-url=https://${TS_FQDN:-localhost}/prometheus"
 
   # ---------------------------------------------------------------------------
   # Streamlit dashboard — runs on the Pi, accessible from any browser on the

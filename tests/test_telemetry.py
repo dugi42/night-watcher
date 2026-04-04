@@ -85,68 +85,11 @@ def test_setup_telemetry_creates_metric_and_trace_providers(monkeypatch) -> None
 
     app_metrics = telemetry.setup_telemetry()
 
-    assert app_metrics.frames_processed.name == "night_watcher.frames.processed"
-    assert app_metrics.frame_processing_ms.name == "night_watcher.frames.processing_ms"
-    assert app_metrics.detections_total.name == "night_watcher.detections.total"
-    assert app_metrics.sessions_started.name == "night_watcher.sessions.started"
+    assert app_metrics.frames_processed.name == "frames.processed"
+    assert app_metrics.frame_processing_ms.name == "frames.processing_ms"
+    assert app_metrics.detections_total.name == "detections.total"
+    assert app_metrics.sessions_started.name == "sessions.started"
     assert meter_providers[0].resource["service.version"] == __version__
     assert meter_providers[0].metric_readers[0].exporter.endpoint.endswith("/v1/metrics")
     assert trace_providers[0].processors[0][1].endpoint.endswith("/v1/traces")
 
-
-def test_setup_health_telemetry_registers_callbacks_and_uses_cache(monkeypatch) -> None:
-    fake_meter = _FakeMeter()
-    sys_calls = {"count": 0}
-    pmic_calls = {"count": 0}
-
-    monkeypatch.setattr(telemetry.metrics, "get_meter", lambda _name: fake_meter)
-    monkeypatch.setattr(telemetry._time, "time", lambda: 100.0)
-
-    import src.health as health
-
-    def fake_system_health():
-        sys_calls["count"] += 1
-        return {
-            "cpu": {"percent": 47.5, "frequency_mhz": 2400.0},
-            "memory": {"percent": 31.0},
-            "disk": {"percent": 12.5},
-            "temperature_c": 64.2,
-        }
-
-    def fake_pmic():
-        pmic_calls["count"] += 1
-        return {
-            "ext5v_v": 5.1,
-            "total_power_w": 4.6,
-            "rails": [
-                {"name": "EXT5V", "voltage_v": 5.1, "current_a": 0.9},
-                {"name": "CORE", "voltage_v": 0.9, "current_a": 1.2},
-            ],
-        }
-
-    monkeypatch.setattr(health, "get_system_health", fake_system_health)
-    monkeypatch.setattr(health, "get_pmic_readings", fake_pmic)
-
-    telemetry.setup_health_telemetry()
-
-    cpu_obs = list(fake_meter.observables["system.cpu.percent"][0](None))
-    mem_obs = list(fake_meter.observables["system.memory.percent"][0](None))
-    disk_obs = list(fake_meter.observables["system.disk.percent"][0](None))
-    temp_obs = list(fake_meter.observables["system.temperature_c"][0](None))
-    freq_obs = list(fake_meter.observables["system.cpu.frequency_mhz"][0](None))
-    ext5v_obs = list(fake_meter.observables["pmic.ext5v_v"][0](None))
-    power_obs = list(fake_meter.observables["pmic.total_power_w"][0](None))
-    rail_v_obs = list(fake_meter.observables["pmic.rail.voltage_v"][0](None))
-    rail_a_obs = list(fake_meter.observables["pmic.rail.current_a"][0](None))
-
-    assert [obs.value for obs in cpu_obs] == [47.5]
-    assert [obs.value for obs in mem_obs] == [31.0]
-    assert [obs.value for obs in disk_obs] == [12.5]
-    assert [obs.value for obs in temp_obs] == [64.2]
-    assert [obs.value for obs in freq_obs] == [2400.0]
-    assert [obs.value for obs in ext5v_obs] == [5.1]
-    assert [obs.value for obs in power_obs] == [4.6]
-    assert [(obs.value, obs.attributes["rail"]) for obs in rail_v_obs] == [(5.1, "EXT5V"), (0.9, "CORE")]
-    assert [(obs.value, obs.attributes["rail"]) for obs in rail_a_obs] == [(0.9, "EXT5V"), (1.2, "CORE")]
-    assert sys_calls["count"] == 1
-    assert pmic_calls["count"] == 1

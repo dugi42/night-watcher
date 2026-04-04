@@ -4,9 +4,7 @@ datasources:
   - name: Prometheus
     type: prometheus
     access: proxy
-    # Prometheus is started with --web.route-prefix=/prometheus, so all API
-    # endpoints are served at /prometheus/api/v1/... internally as well.
-    url: http://prometheus:9090/prometheus
+    url: http://prometheus:9090
     isDefault: true
     editable: false
     jsonData:

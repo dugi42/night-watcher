@@ -242,7 +242,6 @@ def test_service_health_stream_and_lifespan(service_module, monkeypatch) -> None
             calls.append(("stop",))
 
     monkeypatch.setattr(service_module, "setup_telemetry", lambda: fake_otel)
-    monkeypatch.setattr(service_module, "setup_health_telemetry", lambda: calls.append(("health",)))
     monkeypatch.setattr(service_module, "DetectionLoop", _FakeLoop)
 
     async def _exercise() -> None:
@@ -253,7 +252,6 @@ def test_service_health_stream_and_lifespan(service_module, monkeypatch) -> None
     asyncio.run(_exercise())
 
     assert calls == [
-        ("health",),
         ("init", service_module._state, service_module._config, service_module._stats, fake_otel),
         ("start",),
         ("stop",),
