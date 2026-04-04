@@ -12,10 +12,20 @@ jobs:
     needs: []   # runs independently of CI; add "test" here to gate on green tests
 
     steps:
+      # Connect the GitHub Actions runner to your Tailscale network so it can
+      # reach the Pi by its Tailscale hostname — no public IP required.
+      - name: Connect runner to Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          hostname: github-actions-deploy
+
       - name: Deploy to Pi via SSH
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.PI_HOST }}
+          # Reach the Pi over Tailscale by its hostname (not a LAN IP).
+          # PI_HOST is no longer needed.
+          host: ${{ secrets.TS_HOSTNAME }}
           username: ${{ secrets.PI_USER }}
           key: ${{ secrets.PI_SSH_KEY }}
           script: |
@@ -25,11 +35,11 @@ jobs:
 
             # Write secrets to .env on the Pi so Docker Compose can read them.
             # The file is never committed — it only exists on the device.
-            cat > .env <<EOF
+            cat > .env <<'ENVEOF'
             TS_AUTHKEY=${{ secrets.TS_AUTHKEY }}
             TS_HOSTNAME=${{ secrets.TS_HOSTNAME }}
             TS_FQDN=${{ secrets.TS_FQDN }}
-            EOF
+            ENVEOF
 
             docker compose pull --quiet
             docker compose up -d --build --remove-orphans

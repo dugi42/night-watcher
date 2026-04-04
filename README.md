@@ -243,20 +243,26 @@ Add the following secrets to your repository
 
 | Secret | Description |
 | --- | --- |
-| `PI_HOST` | Hostname or IP of the Raspberry Pi (LAN or Tailscale) |
 | `PI_USER` | SSH user on the Pi (e.g. `pi`) |
-| `PI_SSH_KEY` | SSH private key for passwordless login |
-| `TS_AUTHKEY` | Tailscale auth key |
-| `TS_HOSTNAME` | Machine name in your tailnet (e.g. `night-watcher-pi`) |
+| `PI_SSH_KEY` | SSH private key — paste the **full PEM block** including `-----BEGIN ... PRIVATE KEY-----` and `-----END ... PRIVATE KEY-----` lines |
+| `TS_AUTHKEY` | Tailscale auth key (used both for the Pi's VPN agent and to connect the GitHub Actions runner to the tailnet) |
+| `TS_HOSTNAME` | Machine name the Pi registers as in your tailnet (e.g. `night-watcher-pi`) — also used as the SSH host in the deploy step |
 | `TS_FQDN` | Full Tailscale domain once connected (e.g. `night-watcher-pi.tail1a2b3c.ts.net`) |
 
-Push to `main` — the deploy workflow SSHs into the Pi, pulls the latest code,
-writes a gitignored `.env` from the secrets, and runs `docker compose up`.
+> **No `PI_HOST` needed.** The deploy workflow joins the Actions runner to your
+> Tailscale network first, then SSHes to the Pi by `TS_HOSTNAME` — no public
+> IP or open firewall port required.
 
-To find the FQDN after the first deploy:
+Push to `main` — the workflow:
+
+1. Joins the GitHub Actions runner to your tailnet (`tailscale/github-action`)
+2. SSHes to the Pi via its Tailscale hostname
+3. Pulls the latest code, writes `.env` from secrets, runs `docker compose up`
+
+To find `TS_FQDN` after the first deploy:
 
 ```bash
-ssh <pi-user>@<pi-host> "docker compose -f ~/night-watcher/docker-compose.yml exec tailscale tailscale status"
+ssh <pi-user>@<TS_HOSTNAME> "docker compose -f ~/night-watcher/docker-compose.yml exec tailscale tailscale status"
 ```
 
 Then update `TS_FQDN` in GitHub Secrets and push again to rebuild the dashboard
