@@ -63,14 +63,23 @@ jobs:
             printf 'TS_FQDN=%s\n'     "$TS_FQDN_VAL"
           } > /tmp/night-watcher.env
 
+          # Clone the repo if this is the first deploy, otherwise pull
+          ssh $SSH_OPTS "${TARGET}" '
+            set -e
+            if [ ! -d ~/night-watcher/.git ]; then
+              git clone https://github.com/dugi42/night-watcher.git ~/night-watcher
+            fi
+            cd ~/night-watcher
+            git pull --ff-only
+          '
+
           # Copy .env to the Pi — never committed to git, only lives on the device
           scp $SSH_OPTS /tmp/night-watcher.env "${TARGET}:~/night-watcher/.env"
 
-          # Pull latest code and restart the stack
+          # Restart the stack
           ssh $SSH_OPTS "${TARGET}" '
             set -e
             cd ~/night-watcher
-            git pull --ff-only
             docker compose pull --quiet
             docker compose up -d --build --remove-orphans
           '
