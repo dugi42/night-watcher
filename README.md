@@ -185,28 +185,38 @@ On first build the YOLO11n weights are downloaded and baked into the image.
 
 ### 3. Configure Tailscale (remote access + TLS)
 
-Copy `.env.example` to `.env` and fill in your Tailscale auth key:
+#### Prerequisites
+
+Enable **HTTPS Certificates** for your tailnet in the Tailscale admin console:
+**DNS → Enable HTTPS Certificates**.
+
+Create a reusable auth key at <https://login.tailscale.com/admin/settings/keys>.
+
+#### GitHub Secrets (automated deployment via `deploy.yml`)
+
+Add the following secrets to your repository
+(**Settings → Secrets and variables → Actions → New repository secret**):
+
+| Secret | Description |
+| --- | --- |
+| `PI_HOST` | Hostname or IP of the Raspberry Pi (LAN or Tailscale) |
+| `PI_USER` | SSH user on the Pi (e.g. `pi`) |
+| `PI_SSH_KEY` | SSH private key for passwordless login |
+| `TS_AUTHKEY` | Tailscale auth key |
+| `TS_HOSTNAME` | Machine name in your tailnet (e.g. `night-watcher-pi`) |
+| `TS_FQDN` | Full Tailscale domain once connected (e.g. `night-watcher-pi.tail1a2b3c.ts.net`) |
+
+Push to `main` — the deploy workflow SSHs into the Pi, pulls the latest code,
+writes a gitignored `.env` from the secrets, and runs `docker compose up`.
+
+To find the FQDN after the first deploy:
 
 ```bash
-cp .env.example .env
-# edit .env and set TS_AUTHKEY and TS_HOSTNAME
+ssh <pi-user>@<pi-host> "docker compose -f ~/night-watcher/docker-compose.yml exec tailscale tailscale status"
 ```
 
-Create an auth key at <https://login.tailscale.com/admin/settings/keys> and
-enable **HTTPS Certificates** in the Tailscale admin console under **DNS**.
-
-After the stack starts, find the FQDN with:
-
-```bash
-docker compose exec tailscale tailscale status
-```
-
-Then set `TS_FQDN` in `.env` to the reported FQDN (e.g.
-`night-watcher-pi.tail1a2b3c.ts.net`) and restart the dashboard service:
-
-```bash
-docker compose up -d dashboard
-```
+Then update `TS_FQDN` in GitHub Secrets and push again to rebuild the dashboard
+with the correct HTTPS URLs.
 
 ### 4. Open the dashboard
 

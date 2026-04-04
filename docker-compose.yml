@@ -197,9 +197,10 @@ services:
   # Prerequisites on the Pi host:
   #   sudo tailscale up   (initial auth — only needed once if already logged in)
   #
-  # Required environment variables (set in .env, see .env.example):
-  #   TS_AUTHKEY   — reusable auth key from https://login.tailscale.com/admin/settings/keys
-  #   TS_HOSTNAME  — machine name in your tailnet (default: night-watcher-pi)
+  # Required environment variables — injected by the deploy workflow from
+  # GitHub Secrets (TS_AUTHKEY, TS_HOSTNAME, TS_FQDN).
+  # On the Pi the workflow writes them to a gitignored .env file before
+  # running `docker compose up`.  See .github/workflows/deploy.yml.
   #
   # HTTPS Certificates must be enabled in the Tailscale admin console:
   #   DNS → Enable HTTPS Certificates
